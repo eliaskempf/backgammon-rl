@@ -6,9 +6,10 @@ decision. This slice is **benchmark-first**: the core contracts (net/equity,
 checkpoint, full Agent hooks, CRN) are deferred to a contract-freeze follow-up
 (see end).
 
-**Status:** env + benchmark complete and green on the laptop. The cluster-CPU run
-is pending (run the benchmark command in §5 on a cluster CPU node); the final env
-keep/replace call + recommended worker count are confirmed once that JSON lands.
+**Status:** env + benchmark complete; tests green. Cluster-CPU run landed (sbatch job
+29176287 on `dlc2cpu09`, a 192-core EPYC-9655 node) — **GREEN at every worker count**
+(557 games/s @ 16 workers up to 4,360 games/s @ 192; see §5). Env call: **keep the DFS
+generator**; recommended self-play parallelism ≈ 64 workers (the scaling-efficiency knee).
 Human review gate precedes WP1+ fan-out.
 
 ---
@@ -114,23 +115,34 @@ and a single CPU thread already does 88k–2.3M forward passes/s — corroborati
 GPU offers nothing for online TD. ~189 games/s on a laptop ⇒ ~1M games in ~1.5 h;
 a cluster CPU node with more cores scales further.
 
-### Cluster CPU — PENDING
+### Cluster CPU (`dlc2cpu09`, 2× AMD EPYC 9655 = 192 phys cores, SMT off, torch 2.12.0+cpu), 10000 games
 
-The benchmark is host-portable (no hardcoded paths/cores; CPU torch wheel only — no
-CUDA). On a cluster CPU node, from the repo root:
+Worker-count sweep on **one exclusive node** (clean scaling curve, no noisy neighbours),
+run via `slurm/benchmark-cpu-sweep.sh` (gitignored; sbatch job 29176287, partition
+`lmbdlc2_cpu-epyc9655`) — 4 runs + aggregate in 92 s.
+
+| workers | games/s | scaling eff | games/s per worker | afterstates/s | net-eval % |
+|---|---|---|---|---|---|
+| 16 | 557.2 | 0.97 | 34.8 | 0.99M | 3.9 |
+| 32 | 1,103.3 | 0.92 | 34.5 | 1.97M | 4.0 |
+| 64 | 2,087.4 | 0.84 | 32.6 | 3.73M | 4.1 |
+| 192 | 4,359.6 | 0.57 | 22.7 | 7.76M | 4.1 |
+
+Single-worker baseline ~36–40 games/s; per-position split unchanged from the laptop
+(move-gen ~69% · encode ~27% · net-eval ~4%, B≈18.6). Net forward-pass (1 thread):
+b1 103k · b8 672k · b16 1.16M · b32 1.79M · b64 2.48M pos/s.
+
+Interpretation: **GREEN at every worker count** — even 16 workers (557 g/s) is 2.8× the
+200 g/s bar. Throughput scales near-linearly to ~64 workers (84% efficient); beyond that
+NUMA/contention bites (192 workers yields 2.1× the games of 64 but at 0.57 efficiency, 22.7
+vs 32.6 g/s per worker). **Sweet spot ≈ 64 workers** for efficient per-core use; use the
+full 192 only when a node is dedicated and raw throughput is all that matters (4,360 g/s ⇒
+~1M games in ~4 min). Intermediate points (96/128) were not sampled. Reproduce:
 
 ```bash
-uv sync --frozen --group dev
-uv run python scripts/benchmark_env.py \
-    --games 5000 --workers "${SLURM_CPUS_PER_TASK:-$(nproc)}" --bench-net --profile \
-    --tag cluster-cpu --out bench_results/cluster-cpu.json
-```
-
-Wrap that in whatever the cluster uses (sbatch/srun); set workers to the node's
-physical core count. Copy the JSON back next to `bench_results/laptop.json`, then:
-
-```bash
-uv run python scripts/aggregate_bench.py bench_results/*.json
+uv sync --frozen --group dev          # once on the login node
+sbatch slurm/benchmark-cpu-sweep.sh   # exclusive node; sweeps 16/32/64/192 workers
+uv run python scripts/aggregate_bench.py bench_results/cluster-cpu-*w-<jobid>.json
 ```
 
 ## 6. Decision rule
@@ -141,9 +153,10 @@ Applied by `scripts/aggregate_bench.py` over the combined JSON:
   bar on the **cluster CPU node**: aggregate **≥ 200 games/s = green**, ≥ 50 acceptable,
   < 50 investigate. If < 50 and move-gen > 70% of the loop, escalate (port enumerator /
   numba / bgsage engine). *Laptop is 189 (acceptable, sub-green only for lack of cores);
-  expected green on the cluster.*
+  cluster confirms green — 557→4,360 games/s across 16→192 workers (§5), so keep the DFS env.*
 - **Workers:** set self-play parallelism near the physical-core count, trimmed to the
-  scaling-efficiency knee.
+  scaling-efficiency knee — measured ≈ 64 workers on the 192-core node (eff 0.84, falling
+  to 0.57 at 192).
 - **CPU vs GPU:** CPU (see §4); net-eval share is the supporting evidence.
 
 ## 7. Deferred to the contract-freeze follow-up
