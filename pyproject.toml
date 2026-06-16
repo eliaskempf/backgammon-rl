@@ -1,0 +1,57 @@
+[project]
+name = "bgrl"
+version = "0.0.1"
+description = "Modular RL pipeline for backgammon (WP0 benchmark-first slice)."
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.1",
+    "torch>=2.6",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "hypothesis>=6.110",
+    "ruff>=0.6",
+    "psutil>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bgrl"]
+
+# CPU-only torch (WP0 is CPU-bound; see DECISIONS.md / plans). Pin torch to the
+# CPU wheel index so we don't pull the multi-GB CUDA build. Revisit for WP2/WP5.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["bgrl", "scripts", "tests"]
+# Vendored third-party oracle: keep verbatim, never lint/format it.
+extend-exclude = ["bgrl/_vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "ANN"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "B"]
+"scripts/**" = ["ANN"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "slow: slow tests (e.g. the differential move-gen oracle over many random positions)",
+]
+filterwarnings = ["error"]

@@ -1,0 +1,6 @@
+"""Agents: the Agent interface and implementations (random, td, ...)."""
+
+from .base import Agent
+from .random_agent import RandomAgent
+
+__all__ = ["Agent", "RandomAgent"]
