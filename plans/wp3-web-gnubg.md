@@ -3,6 +3,8 @@
 **Status:** not started · **Depends on:** WP0 (move-sequence contract + checkpoint spec)
 **Parallel with:** WP1, WP2, WP4 — build against `RandomAgent` until real checkpoints exist.
 
+**Branch:** this session creates branch `wp3-web-gnubg` off the latest `main` itself before any code (CLAUDE.md §10); it never asks the human to manage branches.
+
 A reasonably nice web UI to play backgammon against any checkpoint (or the LLM agent),
 plus serialization of played games into a GNU-Backgammon-importable format and a batch
 analysis pipeline that compares agent moves against gnubg's evaluation.

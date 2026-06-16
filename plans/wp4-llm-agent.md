@@ -2,6 +2,8 @@
 
 **Status:** not started · **Depends on:** WP0 · **Parallel with:** WP1, WP2, WP3
 
+**Branch:** this session creates branch `wp4-llm-agent` off the latest `main` itself before any code (CLAUDE.md §10); it never asks the human to manage branches.
+
 An LLM baseline agent that picks moves by prompting a frontier model via OpenRouter,
 plus a harness that sweeps prompt/format variants to find good settings. Also exposed as
 a web opponent (WP3).

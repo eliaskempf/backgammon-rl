@@ -2,6 +2,8 @@
 
 **Status:** not started · **Depends on:** WP0 (frozen contracts) · **Parallel with:** WP2, WP3, WP4
 
+**Branch:** this session creates branch `wp1-td-lambda` off the latest `main` itself before any code (CLAUDE.md §10); it never asks the human to manage branches.
+
 Delivers the first real agent and, more importantly, the **algorithm-agnostic training
 loop** that later algorithms plug into. The loop must not know it's running TD.
 

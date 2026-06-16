@@ -2,6 +2,8 @@
 
 **Status:** not started · **Depends on:** WP0 · **Last / lowest priority**
 
+**Branch:** this session creates branch `wp5-alphazero` off the latest `main` itself before any code (CLAUDE.md §10); it never asks the human to manage branches.
+
 A "modern RL" capstone demo. **Explicitly overkill for the strength bar** — a WP1 net at
 0-ply, or WP2 at 1-2 ply, already beats a non-pro human, and the field never adopted MCTS
 for backgammon because the dice branching factor makes deep search far less rewarding than

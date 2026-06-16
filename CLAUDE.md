@@ -137,7 +137,8 @@ WP1, WP2, WP3, WP4.** They touch largely disjoint subtrees (`training/`+`agents/
 `agents/expectimax_*`, `web/`+`serialization/`, `llm/`+`agents/llm_*`), which is what
 makes parallel work safe. Discipline:
 
-- **One branch per session.** No two sessions edit the same file concurrently.
+- **One branch per session, created by the session itself** (see §10 — the human never
+  creates, switches, or merges branches). No two sessions edit the same file concurrently.
 - **Shared files are off-limits to parallel edits:** `CLAUDE.md`, the WP0 contract
   modules, shared `__init__` exports. If a session finds the contract is wrong, it
   **escalates and pauses** — it does NOT patch around it or edit the contract on its
@@ -182,6 +183,13 @@ bgsage or XG. State this in any user-facing output.
 
 ## 10. Working agreement for sessions
 
+- **Own your branch — the session creates it, the human never does.** Before touching
+  any code for a work package, branch off the latest `main` yourself:
+  `git checkout main && git pull --ff-only && git checkout -b wpN-shortname` (use the
+  plan's slug, e.g. `wp1-td-lambda`). Do all WP work on that branch and **never commit
+  WP work straight to `main`**. When `ruff` + `pytest` are green and the WP is done, open
+  a PR to `main` (or fast-forward merge if working solo); the next WP branches off the
+  updated `main`. Do not ask the human to create, switch, or merge branches.
 - Break work into 2-3 steps and check in before large irreversible moves (big
   refactors, deleting/regenerating modules).
 - Flag when guessing vs. confident. Search/verify external API surfaces (OpenRouter,

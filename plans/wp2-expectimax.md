@@ -2,6 +2,8 @@
 
 **Status:** not started · **Depends on:** WP0 · **Parallel with:** WP1, WP3, WP4
 
+**Branch:** this session creates branch `wp2-expectimax` off the latest `main` itself before any code (CLAUDE.md §10); it never asks the human to manage branches.
+
 A pure agent-layer add-on: wrap any `ValueNet` in depth-limited expectimax search over
 dice chance nodes. This is what real bots (gnubg/XG) do, and it's simpler and more
 effective here than MCTS. The env and training loop are untouched.
