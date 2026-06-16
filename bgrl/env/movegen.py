@@ -103,7 +103,7 @@ def legal_moves(state: EnvState, dice: Dice) -> list[tuple[Move, EnvState]]:
             for sm in _submoves_for_die(cur, mover, die):
                 extended = True
                 nxt = apply_submove(cur, mover, sm)
-                visit(nxt, remaining[:i] + remaining[i + 1 :], path + (sm,))
+                visit(nxt, remaining[:i] + remaining[i + 1 :], (*path, sm))
         if not extended and path:  # leaf: nothing more can be played on this branch
             key = (cur.board, cur.bar, cur.off)
             n = len(path)

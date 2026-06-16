@@ -5,6 +5,7 @@
 
 from .apply import apply_submove
 from .board import initial_board
+from .dice import DiceSource, RandomDiceSource, ReplayDiceSource, roll_dice
 from .encoding import ENCODING_VERSION, N_FEATURES, encode
 from .env import Env
 from .movegen import legal_moves
@@ -17,11 +18,14 @@ __all__ = [
     "N_FEATURES",
     "OFF",
     "Dice",
+    "DiceSource",
     "Env",
     "EnvState",
     "Move",
     "Outcome",
     "Player",
+    "RandomDiceSource",
+    "ReplayDiceSource",
     "SubMove",
     "WinKind",
     "apply_submove",
@@ -30,4 +34,5 @@ __all__ = [
     "is_terminal",
     "legal_moves",
     "outcome",
+    "roll_dice",
 ]

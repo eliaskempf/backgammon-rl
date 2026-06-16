@@ -65,14 +65,14 @@ def oracle_after_keys(state, dice):
     roll = (-dice[0], -dice[1]) if state.turn is WHITE else (dice[0], dice[1])
     try:
         plays = to_ref(state).get_valid_plays(player, roll)
-    except Exception as e:  # noqa: BLE001 - the reference asserts on rare states
+    except Exception as e:  # the reference asserts on rare states
         raise OracleUnsupported from e
     keys = set()
     for play in plays:
         g = to_ref(state)
         try:
             g.execute_play(player, play)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # the reference asserts on rare states
             raise OracleUnsupported from e
         board = tuple(
             (c if col == ref.WHITE else (-c if col == ref.BLACK else 0)) for (c, col) in g.board

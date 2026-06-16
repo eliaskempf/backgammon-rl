@@ -17,8 +17,7 @@ import torch
 from torch import nn
 
 from bgrl.env.encoding import N_FEATURES
-
-OUTCOME_DIM = 5
+from bgrl.nets.base import OUTCOME_DIM  # the contract constant lives in nets.base
 
 
 class MLPValueNet(nn.Module):
@@ -31,12 +30,27 @@ class MLPValueNet(nn.Module):
         outcome_dim: int = OUTCOME_DIM,
     ) -> None:
         super().__init__()
+        self._arch = {"hidden": hidden, "n_features": n_features, "outcome_dim": outcome_dim}
         self.net = nn.Sequential(
             nn.Linear(n_features, hidden),
             nn.Sigmoid(),
             nn.Linear(hidden, outcome_dim),
             nn.Sigmoid(),
         )
+
+    def arch_config(self) -> dict[str, object]:
+        """Constructor kwargs (plus a ``class`` tag) needed to rebuild this module.
+
+        Paired with :meth:`from_config` and the checkpoint registry so a saved net
+        reconstructs without the loader hardcoding the architecture.
+        """
+        return {"class": type(self).__name__, **self._arch}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> MLPValueNet:
+        """Rebuild from :meth:`arch_config` output (the ``class`` tag is ignored)."""
+        kwargs = {k: v for k, v in config.items() if k != "class"}
+        return cls(**kwargs)  # type: ignore[arg-type]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)

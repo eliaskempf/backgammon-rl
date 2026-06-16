@@ -1,7 +1,7 @@
 [project]
 name = "bgrl"
 version = "0.0.1"
-description = "Modular RL pipeline for backgammon (WP0 benchmark-first slice)."
+description = "Modular RL pipeline for backgammon."
 requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.1",
@@ -43,6 +43,11 @@ extend-exclude = ["bgrl/_vendor"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "ANN"]
 ignore = ["ANN401"]
+
+# `tests` is a first-party package (it imports from `tests.env.helpers`); without
+# this ruff misgroups it as third-party and reports I001.
+[tool.ruff.lint.isort]
+known-first-party = ["bgrl", "tests"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN", "B"]

@@ -26,6 +26,8 @@ def test_oracle_plays_are_a_subset_of_ours():
             continue
         checked += 1
         missing = theirs - mine
-        assert not missing, f"oracle found plays we miss: state={state} dice={dice} missing={missing}"
+        assert not missing, (
+            f"oracle found plays we miss: state={state} dice={dice} missing={missing}"
+        )
 
     assert checked > 1000  # ensure we actually exercised the oracle

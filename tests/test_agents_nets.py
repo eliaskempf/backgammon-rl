@@ -2,6 +2,7 @@
 
 import numpy as np
 import torch
+
 from bgrl.agents import RandomAgent
 from bgrl.env import Env, encode
 from bgrl.nets import OUTCOME_DIM, MLPValueNet

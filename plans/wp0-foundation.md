@@ -1,10 +1,12 @@
 # WP0 — Foundation (gates everything)
 
-**Status:** benchmark-first slice complete — env + correctness suite + throughput
-benchmark green on the laptop; **cluster-CPU run and the full contract freeze are
-pending**. Decisions & deviations recorded in `DECISIONS.md` (notably: a DFS
-afterstate generator with gym-backgammon as a differential oracle instead of a
-literal port; mover-relative 200-feature encoding; CPU-only — GPU deferred to WP2/WP5).
+**Status:** complete, pending human review. Env + correctness suite + throughput
+benchmark green (laptop + cluster CPU); contracts §2,§3,§5,§6,§7 are now **frozen**
+(`uv run ruff check` clean, `uv run pytest` green — 61 tests). Decisions & deviations in
+`DECISIONS.md` (notably: a DFS afterstate generator with gym-backgammon as a differential
+oracle instead of a literal port; mover-relative 200-feature encoding; gnubg-cumulative
+5-vector with anti-symmetric equity and mover-POV afterstate selection; CPU-only — GPU
+deferred to WP2/WP5).
 · **Owner:** solo session, human-reviewed before fan-out
 **Depends on:** nothing · **Blocks:** WP1–WP5
 
@@ -17,19 +19,19 @@ rework everywhere.
 
 ## 0. Deliverables checklist
 
-- [ ] Repo scaffold: uv project (Python 3.13), `bgrl/` package, `scripts/`, `tests/`,
+- [x] Repo scaffold: uv project (Python 3.13), `bgrl/` package, `scripts/`, `tests/`,
       ruff + pytest configured, CI-runnable `uv run pytest` / `uv run ruff check`.
-- [ ] `bgrl/env`: board state, dice, **legal-move + afterstate enumeration**, encoding,
+- [x] `bgrl/env`: board state, dice, **legal-move + afterstate enumeration**, encoding,
       outcome detection. Build-vs-wrap decision made *on benchmark evidence* (§4).
-- [ ] Frozen **EnvState / move / afterstate contract** (§2).
-- [ ] Frozen **Agent interface** (§3).
-- [ ] Frozen **Net + equity-module interface** (§5), with cube-ready vector output.
-- [ ] **Checkpoint spec** (§6).
-- [ ] **RNG/seeding** contract for reproducible dice (§7).
-- [ ] **Test harness**: move-gen correctness (golden + property-based), perspective
+- [x] Frozen **EnvState / move / afterstate contract** (§2).
+- [x] Frozen **Agent interface** (§3).
+- [x] Frozen **Net + equity-module interface** (§5), with cube-ready vector output.
+- [x] **Checkpoint spec** (§6).
+- [x] **RNG/seeding** contract for reproducible dice (§7).
+- [x] **Test harness**: move-gen correctness (golden + property-based), perspective
       invariant, encoding round-trips (§8).
-- [ ] **Env throughput benchmark** runnable on laptop + remote CPU/GPU (§4).
-- [ ] Short `DECISIONS.md` recording the build-vs-wrap call and any contract deviations.
+- [x] **Env throughput benchmark** runnable on laptop + remote CPU/GPU (§4).
+- [x] Short `DECISIONS.md` recording the build-vs-wrap call and any contract deviations.
 
 ## 1. Encoding (fixed)
 

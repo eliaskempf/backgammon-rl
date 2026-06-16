@@ -1,6 +1,7 @@
 """Self-play determinism and the multiprocessing aggregation path."""
 
 import numpy as np
+
 from bgrl.bench.selfplay import play_random_game, run_selfplay
 
 

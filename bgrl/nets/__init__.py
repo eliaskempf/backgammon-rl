@@ -1,5 +1,14 @@
-"""Value/policy networks and (later) the equity-reduction module."""
+"""Value/policy networks and the equity-reduction module."""
 
-from .value_net import OUTCOME_DIM, MLPValueNet
+from .base import OUTCOME_DIM, ValueNet
+from .equity import CENTERED_CUBE, CubeContext, equity
+from .value_net import MLPValueNet
 
-__all__ = ["OUTCOME_DIM", "MLPValueNet"]
+__all__ = [
+    "CENTERED_CUBE",
+    "OUTCOME_DIM",
+    "CubeContext",
+    "MLPValueNet",
+    "ValueNet",
+    "equity",
+]
