@@ -99,3 +99,51 @@ test of the human's understanding. Use if a more honest review is wanted.
   vectorized/batched afterstate eval even at 0-ply.
 - This WP's strength bar (beat a non-pro human) is essentially already met by a
   well-trained net here; WP2 only widens the margin.
+
+---
+
+## Phase A — implemented (decisions & deviations)
+
+**Status:** Phase A complete on branch `wp1-td-lambda`. `ruff check` clean;
+`pytest` 71 passed, 1 skipped (the smoke test, gated until the core is filled).
+The TD core is hollow and awaits the human (Phase B).
+
+**Decisions (confirmed with the user):**
+- **TD target = `p_win` head only** (index 0). The 5-vector shape is preserved;
+  the gammon/backgammon heads stay wired but untrained.
+- **Guided scaffold.** `td_lambda.py` provides the eligibility-trace storage (one
+  zero tensor per net parameter), a carry-over slot, and a differentiable value
+  helper `_value(afterstate, perspective)`; the human writes only `TDLambda.step`
+  and `TDLambda.episode_end` (trace recurrence, TD error + perspective sign-flip,
+  terminal bootstrap, manual trace-scaled weight update + reset). Comments there
+  state invariants only — never `reward + γ·V(next)` or `λ·γ`.
+
+**Files created:** `bgrl/training/{__init__,loop,evaluate,td_lambda}.py`,
+`bgrl/agents/td_agent.py`, `scripts/{train,eval_agent}.py`,
+`tests/training/{test_loop,test_evaluate,test_td_training_smoke}.py`,
+`tests/agents/test_td_agent.py`.
+
+**Deviations / notable choices:**
+- **CRN uses seed-paired generators, not record-then-replay.** Swapping seats
+  changes the trajectory, so the second game of a pair may need more rolls than
+  the first produced → `ReplayDiceSource` exhausts. `play_match` instead seeds two
+  generators identically per pair (seed drawn from the match `rng`), giving a
+  shared on-demand dice stream that survives length divergence.
+- **RNG separation for reproducibility.** `scripts/train.py` splits one seed via
+  `np.random.default_rng(seed).spawn(2)` into independent train/eval streams (eval
+  must not consume training dice), and calls `torch.manual_seed(seed)` so net
+  initialisation is reproducible too. A Phase-A test asserts eval draws don't
+  perturb the training dice.
+- **Smoke test self-activates.** `test_td_training_smoke.py` is `@pytest.mark.slow`
+  + `skipif(not _td_core_ready())`, where `_td_core_ready()` probes `TDLambda.step`
+  for `NotImplementedError`. It turns green automatically once Phase B lands; no
+  manual un-skip to forget. Bar: >90% vs RandomAgent after ~1000 games, reproducible.
+- **Parallel-safety (§7a).** `TDAgent` is imported via `bgrl.agents.td_agent`
+  directly; `bgrl/agents/__init__.py` is left untouched. Exporting `TDAgent` from
+  the package `__init__` is a deferred post-merge one-liner.
+- **`td_agent.py` has zero `torch` imports** — pure wiring, so no TD math can leak
+  out of `td_lambda.py`.
+
+**Next:** Phase B (human fills the two `TODO(human)` bodies), then Phase C (CC
+reviews the human's code against the correctness/efficiency checklist above —
+discussing, not auto-fixing — and the smoke test must pass).
