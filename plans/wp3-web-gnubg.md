@@ -86,3 +86,39 @@ surface "agent move vs. gnubg's preferred move + equity loss."
   (`Env.legal_moves`). The browser only renders + collects intent.
 - gnubg ply numbering is its own convention (raw = 0-ply); keep our internal convention
   consistent and translate at the boundary.
+
+---
+
+## Status & decisions
+
+Split into **two PRs** (disjoint subtrees; independently reviewable):
+- **PR1 — Part A (web + UI): DONE** on branch `wp3-web-ui` (off `main`, rebased onto WP1).
+- **PR2 — Part B (gnubg export + analysis): not started**, to be done in its own session
+  on `wp3-gnubg-export`. gnubg will be installed (`apt-get install gnubg`) and the live
+  round-trip + equity-loss report validated in-session.
+
+### Part A decisions (implemented)
+- **Backend:** FastAPI app factory `create_app()` in `bgrl/web/` (`schemas`, `views`,
+  `session`, `agents`, `app`). `GameSession`/`SessionStore` hold server-side state and are
+  the sole legality boundary — handlers never reason about legality, the env does.
+- **API (frozen contract, pydantic):** `POST /new_game`, `POST /roll`,
+  `GET /legal_moves`, `POST /move` (by `move_id`; stale/illegal → 409),
+  `POST /agent_move`, `GET /checkpoints`, `POST /export_mat` (501 until PR2). State is
+  projected in **absolute** coordinates; never mover-relative.
+- **Incremental human move:** the frontend filters the full legal-`Move` list by the
+  chosen submove prefix (no partial-legality endpoint); a complete prefix submits its
+  `move_id`. A legal-moves list (notation buttons) is the always-works fallback.
+- **Frontend:** the human chose the **npm path**. Verification found *no maintained,
+  play-capable* JS board component, so we use the npm toolchain only for tooling +
+  rendering: a **custom Vite + React + TS SVG board** we control. Source in `frontend/`;
+  the built bundle is **committed to `bgrl/web/static/`** (Node 18 only needed to
+  rebuild; FastAPI serves the bundle). `scripts/play_web.py` runs the server.
+- **Deps:** new `web` dependency-group (`fastapi`, `uvicorn[standard]`); `httpx` added to
+  `dev` for the `TestClient`. Narrow `filterwarnings` ignore for Starlette's
+  `httpx`-vs-`httpx2` TestClient deprecation (we stay on `httpx`).
+- **Tests:** `tests/web/` — view projections, `GameSession` mechanics (incl. a genuinely
+  blocked forced-pass position and terminal detection), and a `TestClient` suite (full
+  game loop, 409 enforcement, session isolation, checkpoint opponent). All green; ruff
+  clean. Live `uvicorn` smoke confirmed static serving + the full game flow.
+- **Verified facts:** WHITE enters from the bar at absolute index `24 − die` (into BLACK's
+  home, 18–23); doubles render 4 submoves (e.g. `6/2 6/2 6/2 6/2`).
