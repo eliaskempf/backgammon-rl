@@ -9,10 +9,16 @@ checkpoints periodically plus a ``best.pt`` (best eval win-rate) and ``final.pt`
 Online TD(λ) is single-process; pin BLAS to one thread (the net is tiny, so intra-op
 threading is pure overhead and would oversubscribe a shared node).
 
+**Resumable & SIGTERM-safe.** A rolling ``latest.pt`` bundles the net plus the two RNG
+states + game counter; ``--resume`` continues from it **bit-exactly** (traces are zero at
+every game boundary, so weights + RNG + counter are the whole state). On SIGTERM (SLURM
+time limit / preemption) or SIGINT the current game finishes, ``latest.pt`` is written,
+and the process exits cleanly — so a requeued job continues seamlessly.
+
 Example
 -------
     uv run python scripts/train.py --games 1000000 --eval-opponent pubeval \
-        --eval-every 25000 --save-every 50000 --seed 0 --out-dir runs/wp1 --wandb
+        --eval-every 25000 --save-every 50000 --seed 0 --out-dir runs/wp1 --wandb --resume
 """
 
 from __future__ import annotations
@@ -21,9 +27,16 @@ import argparse
 from pathlib import Path
 
 
+class _ResumeExit(Exception):
+    """Raised at a game boundary after a stop signal — ``latest.pt`` is already saved."""
+
+    def __init__(self, games_done: int) -> None:
+        self.games_done = games_done
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Self-play TD(λ) trainer.")
-    parser.add_argument("--games", type=int, default=1_000_000, help="self-play games to run")
+    parser.add_argument("--games", type=int, default=1_000_000, help="total self-play games")
     parser.add_argument("--hidden", type=int, default=64, help="hidden units in the value net")
     parser.add_argument("--lam", type=float, default=0.7, help="TD(λ) trace-decay λ")
     parser.add_argument("--lr", type=float, default=0.1, help="learning rate")
@@ -40,6 +53,11 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=0, help="master RNG seed (numpy + torch)")
     parser.add_argument("--out-dir", type=Path, default=Path("runs/wp1"), help="output directory")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue from {out-dir}/latest.pt if it exists (else start fresh)",
+    )
     parser.add_argument("--wandb", action="store_true", help="log metrics to Weights & Biases")
     parser.add_argument("--wandb-project", default="backgammon-rl", help="W&B project name")
     args = parser.parse_args()
@@ -47,7 +65,7 @@ def main() -> None:
     # Heavy imports inside main so `--help` stays light and mp workers (if added
     # later) don't pull torch into every process. Mirrors scripts/benchmark_env.py.
     import csv
-    import time
+    import signal
 
     import numpy as np
     import torch
@@ -56,78 +74,131 @@ def main() -> None:
     from bgrl.agents.td_agent import TDAgent
     from bgrl.game import GameResult
     from bgrl.nets.value_net import MLPValueNet
-    from bgrl.serialization import load_agent, load_checkpoint, save_checkpoint
+    from bgrl.serialization import load_agent, load_checkpoint, load_net, save_checkpoint
     from bgrl.training.evaluate import play_match
     from bgrl.training.loop import train
 
-    torch.set_num_threads(1)  # tiny net: intra-op threads only add overhead / oversubscribe
-    # Seed torch so net initialisation is reproducible, and split the numpy seed into two
-    # INDEPENDENT streams: training dice must never be perturbed by eval, or "same seed ->
-    # same curve" breaks.
-    torch.manual_seed(args.seed)
-    train_rng, eval_rng = np.random.default_rng(args.seed).spawn(2)
-
-    net = MLPValueNet(hidden=args.hidden)
-    agent = TDAgent(net, lam=args.lam, lr=args.lr, gamma=args.gamma)
+    torch.set_num_threads(1)  # tiny net: intra-op threads only add overhead / oversubscribe;
+    # also required for the bit-exact (single-thread-deterministic) resume guarantee.
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    latest_path = args.out_dir / "latest.pt"
+    total = args.games
 
+    # --- Resume from latest.pt, or start fresh ---------------------------------------
+    resuming = args.resume and latest_path.exists()
+    if resuming:
+        meta = load_checkpoint(latest_path)["metadata"]
+        net = load_net(load_checkpoint(latest_path))  # arch (incl. hidden) comes from the file
+        start = int(meta["games_trained"])
+        best_win_rate = float(meta.get("best_win_rate", -1.0))
+        lam, lr, gamma = float(meta["lam"]), float(meta["lr"]), float(meta["gamma"])
+        seed = int(meta["seed"])
+        eval_opponent = meta.get("eval_opponent", args.eval_opponent)
+        wandb_run_id = meta.get("wandb_run_id")
+        for name, cli_v, stored_v in (
+            ("lam", args.lam, lam),
+            ("lr", args.lr, lr),
+            ("gamma", args.gamma, gamma),
+        ):
+            if cli_v != stored_v:
+                print(f"WARNING: resuming with stored {name}={stored_v} (CLI {cli_v} ignored)")
+        torch.manual_seed(seed)  # harmless — weights are loaded, not re-initialised
+        train_rng, eval_rng = np.random.default_rng(seed).spawn(2)
+        train_rng.bit_generator.state = meta["train_rng_state"]
+        eval_rng.bit_generator.state = meta["eval_rng_state"]
+    else:
+        seed, lam, lr, gamma = args.seed, args.lam, args.lr, args.gamma
+        eval_opponent, wandb_run_id = args.eval_opponent, None
+        start, best_win_rate = 0, -1.0
+        torch.manual_seed(seed)  # reproducible net initialisation
+        # Two INDEPENDENT streams: training dice must never be perturbed by eval.
+        train_rng, eval_rng = np.random.default_rng(seed).spawn(2)
+        net = MLPValueNet(hidden=args.hidden)
+
+    agent = TDAgent(net, lam=lam, lr=lr, gamma=gamma)
     config = {
-        "games": args.games,
-        "hidden": args.hidden,
-        "lam": args.lam,
-        "lr": args.lr,
-        "gamma": args.gamma,
-        "seed": args.seed,
-        "eval_opponent": args.eval_opponent,
+        "games": total,
+        "hidden": net.arch_config()["hidden"],
+        "lam": lam,
+        "lr": lr,
+        "gamma": gamma,
+        "seed": seed,
+        "eval_opponent": eval_opponent,
     }
 
     def make_opponent() -> Agent:
-        if args.eval_opponent == "pubeval":
+        if eval_opponent == "pubeval":
             return PubevalAgent()
-        if args.eval_opponent == "random":
+        if eval_opponent == "random":
             return RandomAgent(eval_rng)
-        return load_agent(load_checkpoint(args.eval_opponent))  # a checkpoint path
+        return load_agent(load_checkpoint(eval_opponent))  # a checkpoint path
 
     opponent = make_opponent()
 
     def ckpt_metadata(n: int, **extra: object) -> dict:
         return {"games_trained": n, **config, **extra}
 
-    # Stream metrics to disk so a long unattended run is monitorable / survives a crash.
+    # Stream metrics to disk (monitorable / crash-surviving); append when resuming.
     metrics_path = args.out_dir / "metrics.csv"
-    metrics_file = metrics_path.open("w", newline="")
+    write_header = not (resuming and metrics_path.exists())
+    metrics_file = metrics_path.open("a" if resuming else "w", newline="")
     metrics = csv.writer(metrics_file)
-    metrics.writerow(["games", "win_rate", "avg_plies", "truncated", "wall_seconds"])
-    metrics_file.flush()
+    if write_header:
+        metrics.writerow(["games", "win_rate", "avg_plies", "truncated"])
+        metrics_file.flush()
 
     wandb_run = None
     if args.wandb:
         try:
             import wandb
 
-            wandb_run = wandb.init(project=args.wandb_project, config=config, dir=str(args.out_dir))
+            init_kw = {"project": args.wandb_project, "config": config, "dir": str(args.out_dir)}
+            if resuming and wandb_run_id:
+                init_kw |= {"id": wandb_run_id, "resume": "allow"}
+            wandb_run = wandb.init(**init_kw)
+            wandb_run_id = wandb_run.id
         except Exception as exc:  # never let optional logging kill a long run
-            # CSV remains the reliable record; warn loudly but keep training.
             print(f"WARNING: --wandb requested but unavailable ({exc!r}); continuing with CSV only")
 
-    start = time.perf_counter()
-    best_win_rate = -1.0
+    # --- Stop-signal handling: SLURM sends SIGTERM near the time limit -----------------
+    stop = {"requested": False}
+
+    def request_stop(signum: int, frame: object) -> None:
+        stop["requested"] = True  # handlers must be minimal — save at the next boundary
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+
     last_win_rate: float | None = None
 
-    def run_eval(n: int) -> float:
-        """Evaluate the live net vs the benchmark, log/record, and update ``best.pt``.
+    def save_latest(games_done: int) -> None:
+        """Atomically write the rolling resume bundle: net + RNG states + counter + best."""
+        save_checkpoint(
+            net,
+            latest_path,
+            trained_with="td_lambda",
+            metadata=ckpt_metadata(
+                games_done,
+                best_win_rate=best_win_rate,
+                wandb_run_id=wandb_run_id,
+                train_rng_state=train_rng.bit_generator.state,
+                eval_rng_state=eval_rng.bit_generator.state,
+            ),
+        )
 
-        Uses a fresh, non-learning ``ValueAgent`` so eval fires no learning hooks and
+    def run_eval(n: int) -> float:
+        """Evaluate the live net vs the benchmark, record the row, and update best.pt.
+
+        A fresh non-learning ``ValueAgent`` is used so eval fires no learning hooks and
         never perturbs the trainer's traces.
         """
         nonlocal best_win_rate
         res = play_match(ValueAgent(net), opponent, pairs=args.eval_pairs, rng=eval_rng)
-        elapsed = time.perf_counter() - start
         print(
-            f"[game {n}] win-rate vs {args.eval_opponent}: {res.win_rate_a:.3f} "
+            f"[game {n}] win-rate vs {eval_opponent}: {res.win_rate_a:.3f} "
             f"(avg plies {res.avg_plies:.1f}, {res.truncated} truncated)"
         )
-        metrics.writerow([n, res.win_rate_a, res.avg_plies, res.truncated, round(elapsed, 1)])
+        metrics.writerow([n, res.win_rate_a, res.avg_plies, res.truncated])
         metrics_file.flush()
         if wandb_run is not None:
             wandb_run.log(
@@ -135,7 +206,6 @@ def main() -> None:
                     "win_rate": res.win_rate_a,
                     "avg_plies": res.avg_plies,
                     "truncated": res.truncated,
-                    "wall_seconds": elapsed,
                 },
                 step=n,
             )
@@ -151,27 +221,39 @@ def main() -> None:
 
     def on_game_end(n: int, result: GameResult) -> None:
         nonlocal last_win_rate
-        if args.eval_every and n % args.eval_every == 0:
-            last_win_rate = run_eval(n)
-        if args.save_every and n % args.save_every == 0:
-            path = args.out_dir / f"td_{n:07d}.pt"
-            save_checkpoint(net, path, trained_with="td_lambda", metadata=ckpt_metadata(n))
-            print(f"[game {n}] saved {path}")
+        games_done = start + n  # global counter across resumes
+        if args.eval_every and games_done % args.eval_every == 0:
+            last_win_rate = run_eval(games_done)
+        if args.save_every and games_done % args.save_every == 0:
+            path = args.out_dir / f"td_{games_done:07d}.pt"
+            save_checkpoint(net, path, trained_with="td_lambda", metadata=ckpt_metadata(games_done))
+            save_latest(games_done)
+            print(f"[game {games_done}] saved {path}")
+        if stop["requested"]:
+            save_latest(games_done)
+            raise _ResumeExit(games_done)
 
-    print(f"training {args.games} games ({config}) -> {args.out_dir}")
+    verb = "resuming" if resuming else "training"
+    print(f"{verb} -> {total} games (start={start}, {config}) -> {args.out_dir}")
     try:
-        train(agent, games=args.games, rng=train_rng, on_game_end=on_game_end)
-        # Final eval unless the last game already landed on the eval cadence (avoids a
-        # duplicate metrics row / wandb step), then always write final.pt.
-        if args.eval_every and args.games % args.eval_every != 0:
-            last_win_rate = run_eval(args.games)
-        save_checkpoint(
-            net,
-            args.out_dir / "final.pt",
-            trained_with="td_lambda",
-            metadata=ckpt_metadata(args.games, win_rate=last_win_rate),
-        )
-        print(f"done (best win-rate vs {args.eval_opponent}: {best_win_rate:.3f})")
+        if start >= total:
+            print(f"already complete ({start} >= {total} games); nothing to do")
+        else:
+            train(agent, games=total - start, rng=train_rng, on_game_end=on_game_end)
+            # Final eval unless the last game already landed on the eval cadence (avoids a
+            # duplicate metrics row / wandb step), then always write final.pt + latest.pt.
+            if args.eval_every and total % args.eval_every != 0:
+                last_win_rate = run_eval(total)
+            save_checkpoint(
+                net,
+                args.out_dir / "final.pt",
+                trained_with="td_lambda",
+                metadata=ckpt_metadata(total, win_rate=last_win_rate),
+            )
+            save_latest(total)
+            print(f"done (best win-rate vs {eval_opponent}: {best_win_rate:.3f})")
+    except _ResumeExit as exit_:
+        print(f"signal received: checkpointed at game {exit_.games_done} for resume; exiting")
     finally:
         metrics_file.close()
         if wandb_run is not None:

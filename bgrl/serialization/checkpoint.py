@@ -21,6 +21,7 @@ Layout::
 
 from __future__ import annotations
 
+import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -67,6 +68,10 @@ def save_checkpoint(
     ``net`` must expose ``arch_config()`` (every net in :data:`NET_REGISTRY`
     does). ``created_at`` (UTC) and ``git_sha`` are stamped automatically and
     merged with any caller ``metadata`` (e.g. ``games_trained``, ``notes``).
+
+    Written atomically (to a ``.tmp`` sibling, then :func:`os.replace`) so a crash
+    mid-write — e.g. a SIGKILL after the SIGTERM grace period — never leaves a
+    truncated checkpoint, which matters for the rolling resume file (``latest.pt``).
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +87,9 @@ def save_checkpoint(
         "trained_with": trained_with,
         "metadata": meta,
     }
-    torch.save(checkpoint, path)
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(checkpoint, tmp)
+    os.replace(tmp, path)  # atomic on the same filesystem
 
 
 def load_checkpoint(path: str | Path, map_location: str = "cpu") -> dict:

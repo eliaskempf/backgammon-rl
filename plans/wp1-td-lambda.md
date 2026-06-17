@@ -264,3 +264,20 @@ offline logging works. `ruff` clean, `pytest` green.
 (command above; set partition/`--account`/`--qos`), `mkdir -p runs/sweep`, `sbatch`;
 after ~overnight, `uv run python scripts/aggregate_runs.py runs/sweep/* --reeval-pairs
 500`, then `wandb sync runs/sweep/*/wandb/offline-run-*` if using W&B.
+
+**Resumable & SIGTERM-safe (bit-exact).** A rolling `latest.pt` bundles the net + both
+RNG states + game counter + best-so-far (atomic write); `--resume` continues from it.
+Because TD(λ) traces are zero at every game boundary, weights + RNG + counter are the
+*entire* resumable state, so a resumed run is **bit-identical** to an uninterrupted one
+(asserted in `tests/training/test_resume.py`; relies on the existing
+`torch.set_num_threads(1)`). On `SIGTERM`/`SIGINT` the current game finishes, `latest.pt`
+is written, and the process exits 0. For a time-limited/preemptible partition, make the
+array task auto-continue by adding to the sbatch:
+
+    #SBATCH --signal=B:TERM@120     # SIGTERM 120s before the limit
+    #SBATCH --requeue
+    # ... and always pass --resume to scripts/train.py (idempotent: fresh on first run)
+
+On requeue, SLURM re-runs the same command; `--resume` picks up `latest.pt` and the run
+continues seamlessly until it reaches `--games`. Learning hyperparameters (λ/lr/γ) and
+the net architecture are taken from the checkpoint on resume (CLI divergence warns).
