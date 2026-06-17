@@ -241,17 +241,26 @@ pubeval, climbing toward 0.5+; final human-competitiveness is confirmed via gnub
 - defaults bumped to the real run: `--games 1_000_000 --eval-every 25000 --save-every 50000`.
 - `scripts/eval_agent.py` gained `--opponent pubeval`.
 
-**Sweep + pick-best (user's chosen path).** `slurm/train_sweep.sbatch` runs a SLURM
-array (seeds × hidden) of independent single-core 1M-game runs (the cluster's value is
-parallel runs, not a faster single run) + `slurm/README.md` ops doc;
-`scripts/aggregate_runs.py` ranks runs by vs-pubeval win-rate (optional lower-variance
-re-eval of each `best.pt`) and names the winner.
+**Sweep + pick-best (user's chosen path).** The cluster runs a SLURM **array** of
+independent single-core 1M-game runs over seeds × hidden (the cluster's value is
+parallel runs, not a faster single run). The sbatch is **generated on the cluster, not
+committed** (`slurm/` is gitignored); each array task just sets `OMP_NUM_THREADS=1` and
+`WANDB_MODE=offline`, picks `(seed, hidden)` from its `$SLURM_ARRAY_TASK_ID`, and runs:
+
+    uv run --frozen --group train python scripts/train.py \
+        --games 1000000 --hidden "$H" --lam 0.7 --lr 0.1 \
+        --eval-opponent pubeval --eval-every 25000 --eval-pairs 100 --save-every 50000 \
+        --seed "$SEED" --out-dir "runs/sweep/h${H}_s${SEED}" --wandb
+
+`scripts/aggregate_runs.py` then ranks runs by vs-pubeval win-rate (optional
+lower-variance re-eval of each `best.pt`) and names the winner.
 
 **Validated end-to-end** (10k-game run): vs-pubeval win-rate **rose 0.24 → 0.32** by
 5k games (real learning vs a strong reference); `metrics.csv`/`best.pt`/`final.pt`
 written; `eval_agent --opponent pubeval` and `aggregate_runs` consume them; wandb
 offline logging works. `ruff` clean, `pytest` green.
 
-**Launch:** `uv sync --frozen --group train` then `sbatch slurm/train_sweep.sbatch`
-(set `--account`/`--qos` and confirm partition first); after ~overnight,
-`uv run python scripts/aggregate_runs.py runs/sweep/* --reeval-pairs 500`.
+**Launch:** on the login node `uv sync --frozen --group train`, write the array sbatch
+(command above; set partition/`--account`/`--qos`), `mkdir -p runs/sweep`, `sbatch`;
+after ~overnight, `uv run python scripts/aggregate_runs.py runs/sweep/* --reeval-pairs
+500`, then `wandb sync runs/sweep/*/wandb/offline-run-*` if using W&B.

@@ -222,10 +222,8 @@ bench_results/
 .venv-*/
 runs/
 wandb/
-# slurm/ holds machine-specific scratch + job logs; commit only the reusable launcher + doc.
-slurm/*
-!slurm/train_sweep.sbatch
-!slurm/README.md
+# slurm scripts are generated on the cluster, not committed here.
+slurm/
 
 # The stock template ignores any dir named "env/" (virtualenvs); re-include our
 # package subpackages that happen to be named "env".
