@@ -76,3 +76,51 @@ a web opponent (WP3).
 - Keep board rendering and prompt templates as swappable strategies from the start;
   retrofitting the sweep over hardcoded prompts is painful.
 - Cost can balloon silently — log token usage + $ per run, fail loudly on a budget cap.
+
+---
+
+## Implementation notes & decisions (built on branch `wp4-llm-agent`)
+
+Module map (all new):
+- `bgrl/llm/client.py` — `ChatClient` protocol; sync `OpenRouterClient` (httpx, bounded
+  retries, env-var key); `FakeChatClient` (scripted, records calls — the no-network test
+  seam); `CachingChatClient` + JSONL-backed `ResponseCache`.
+- `bgrl/llm/render.py` — `BoardRenderer` protocol + `ascii` / `pip_list` / `moves_only` /
+  `position_id` strategies + `describe_move`. All mover-relative.
+- `bgrl/llm/parse.py` — `OutputFormat` (`INDEX_TEXT` | `STRUCTURED`) + pure `parse_choice`.
+- `bgrl/llm/prompt.py` — `PromptTemplate` (`terse`, `coach`) composing renderer + format.
+- `bgrl/agents/llm_agent.py` — `LLMAgent` (implements `Agent`), `AgentStats`, `Fallback`.
+- `bgrl/llm/scorer.py` — `PositionScorer`, `ReferenceAgentScorer`, `GnubgPositionScorer` stub.
+- `bgrl/llm/refine.py` — `SweepAxes`/`Candidate`/`SweepConfig`, `run_sweep`, `SweepReport`,
+  `BudgetExceeded`.
+- `scripts/refine_llm.py` — thin CLI; offline dry-run by default, `--live` for real models.
+
+Decisions / deviations from the original sketch:
+- **Move expression = integer index into the enumerated legal list** (not free-form
+  move text). Provider-agnostic; `STRUCTURED` adds a `{"choice": int}` JSON-schema on
+  top, and the agent **auto-downgrades to `INDEX_TEXT`** on `StructuredOutputUnsupported`
+  (recorded as a candidate note, not a model failure).
+- **Scorer is pluggable; default oracle is `PubevalAgent` (agreement), not gnubg.** The
+  plan's "score vs gnubg" default depends on WP3's serialization pipeline, which is not
+  on `main`. `GnubgPositionScorer` is a documented stub (`NotImplementedError`) wired in
+  post-WP3-merge; flip the CLI/scorer default to it then. A trained TD checkpoint
+  (`--checkpoint`) unlocks lower-variance equity-loss scoring.
+- **Frozen, seed-determined position set** = the deterministic analogue of CRN (zero
+  dice variance across candidates).
+- **Sync client.** `Agent.act` and the harness are sync; the WP3 async web server calls
+  the agent via `run_in_threadpool` post-merge (seam, not built here).
+- **`PositionIdRenderer` is a placeholder** custom id — gnubg's real Position ID comes
+  from WP3 post-merge (do not hand-roll the bit layout).
+- **Deps:** added only `httpx` (runtime). Tests use a hand-written fake — no mock lib.
+
+Deferred to post-merge (NOT on this branch):
+- `LLMAgent` is **not** yet exported from `bgrl/agents/__init__.py` (avoid a parallel
+  edit to a shared file while WP3 is in flight); import from `bgrl.agents.llm_agent`.
+  Add the export at merge.
+- Web-opponent wiring (WP3×WP4 seam), `GnubgPositionScorer` body, and the real Position
+  ID renderer.
+
+Acceptance status: LLM agent plays legal full games via `play_game` (tested); harness
+emits a ranked report with score/invalid-rate/fallback-rate/cost (offline-tested); no
+live API calls in tests (`FakeChatClient`); `uv run ruff check` clean, `uv run pytest`
+green. The "selectable web opponent" criterion is the deferred WP3×WP4 seam above.
