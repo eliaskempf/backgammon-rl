@@ -426,3 +426,61 @@ class CachingChatClient:
         resp = self._inner.complete(messages, params)
         self._cache.put(key, resp)
         return resp
+
+
+# --------------------------------------------------------------------- budget guard
+
+
+class BudgetExceededError(RuntimeError):
+    """Raised by :class:`BudgetGuardClient` once a run hits its cost or call cap.
+
+    Carries the spend and call count reached so a caller (e.g. ``scripts/eval_llm.py``)
+    can stop a long match mid-flight and still report the partial stats. ``cap_usd`` is
+    the configured ceiling (``inf`` when only a call cap is set).
+    """
+
+    def __init__(self, spent: float, cap_usd: float, calls: int) -> None:
+        self.spent = spent
+        self.cap_usd = cap_usd
+        self.calls = calls
+        super().__init__(
+            f"LLM budget cap reached: spent ${spent:.4f} in {calls} calls (cap ${cap_usd:.4f})"
+        )
+
+
+class BudgetGuardClient:
+    """Wraps a :class:`ChatClient` and aborts once spend or call count crosses a cap.
+
+    The cap is checked *before* each call, so every response it returns is fully paid
+    for and accounted; at most the one call that crosses the line is allowed through
+    before the next call raises :class:`BudgetExceededError`. Wrap the *real* client
+    with this and keep the cache *outside* it
+    (``CachingChatClient(BudgetGuardClient(real))``) so cache hits — which cost nothing
+    new — never count against the budget.
+
+    ``cap_usd`` relies on the provider reporting per-response ``cost``; ``max_calls`` is
+    a provider-independent backstop for when ``cost`` is absent (it stays ``0.0``).
+    """
+
+    def __init__(
+        self,
+        inner: ChatClient,
+        *,
+        cap_usd: float = float("inf"),
+        max_calls: int | None = None,
+    ) -> None:
+        self._inner = inner
+        self._cap_usd = cap_usd
+        self._max_calls = max_calls
+        self.spent = 0.0
+        self.calls = 0
+
+    def complete(self, messages: list[ChatMessage], params: ChatParams) -> ChatResponse:
+        if self.spent >= self._cap_usd or (
+            self._max_calls is not None and self.calls >= self._max_calls
+        ):
+            raise BudgetExceededError(self.spent, self._cap_usd, self.calls)
+        resp = self._inner.complete(messages, params)
+        self.calls += 1
+        self.spent += resp.usage.cost
+        return resp

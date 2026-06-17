@@ -1,8 +1,18 @@
-"""Agents: the Agent interface and implementations (random, value, td, ...)."""
+"""Agents: the Agent interface and implementations (random, value, td, llm, ...)."""
 
 from .base import Agent, LearningAgent
+from .llm_agent import AgentStats, Fallback, LLMAgent
 from .pubeval_agent import PubevalAgent
 from .random_agent import RandomAgent
 from .value_agent import ValueAgent
 
-__all__ = ["Agent", "LearningAgent", "PubevalAgent", "RandomAgent", "ValueAgent"]
+__all__ = [
+    "Agent",
+    "AgentStats",
+    "Fallback",
+    "LLMAgent",
+    "LearningAgent",
+    "PubevalAgent",
+    "RandomAgent",
+    "ValueAgent",
+]

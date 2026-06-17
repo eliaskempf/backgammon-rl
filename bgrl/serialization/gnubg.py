@@ -153,7 +153,7 @@ def analyse_mat(
 # "moves" (candidates sorted best-first, each {"move": [[from,to],...], "score": equity})
 # and "imove" (index of the move actually played; points use 0=off, 25=bar).
 # Set BGRL_PROBE=1 to dump a shallow view of the structure instead of extracting.
-_GNUBG_SCRIPT = r'''
+_GNUBG_SCRIPT = r"""
 import os, json
 import gnubg
 
@@ -222,4 +222,4 @@ for gi, g in enumerate(games):
         })
 
 open(out, "w").write(json.dumps(records))
-'''
+"""

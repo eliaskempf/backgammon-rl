@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 
 from bgrl.llm.client import (
+    BudgetExceededError,
+    BudgetGuardClient,
     CachingChatClient,
     ChatMessage,
     ChatParams,
@@ -141,3 +143,46 @@ def test_structured_output_rejection_detection():
     assert _structured_output_rejected("Model does not support response_format")
     assert _structured_output_rejected("json_schema is not available for this provider")
     assert not _structured_output_rejected("rate limit exceeded")
+
+
+def _priced(text, cost):
+    return ChatResponse(text, Usage(1, 1, 2, cost), "m")
+
+
+def test_budget_guard_blocks_after_cost_cap():
+    # Cap checked before each call: the call that crosses the line still returns; the
+    # next one raises. So with a $0.5 cap and $0.4/call, calls 1-2 pass, call 3 blocks.
+    inner = FakeChatClient([_priced("a", 0.4), _priced("b", 0.4), _priced("c", 0.4)])
+    guard = BudgetGuardClient(inner, cap_usd=0.5)
+    p = ChatParams(model="m")
+    assert guard.complete(MSGS, p).text == "a"
+    assert guard.complete(MSGS, p).text == "b"
+    with pytest.raises(BudgetExceededError):
+        guard.complete(MSGS, p)
+    assert guard.calls == 2
+    assert guard.spent == pytest.approx(0.8)
+
+
+def test_budget_guard_blocks_after_max_calls_when_cost_absent():
+    # Providers may omit cost (stays 0.0); max_calls is the backstop.
+    inner = FakeChatClient(responder=lambda messages, params: "ok")
+    guard = BudgetGuardClient(inner, max_calls=2)
+    p = ChatParams(model="m")
+    guard.complete(MSGS, p)
+    guard.complete(MSGS, p)
+    with pytest.raises(BudgetExceededError):
+        guard.complete(MSGS, p)
+    assert guard.spent == 0.0
+
+
+def test_caching_outside_guard_keeps_hits_free():
+    # Caching(BudgetGuard(real)): a cache hit must not reach the guard, so repeated
+    # identical requests neither re-spend nor count toward the call cap.
+    inner = FakeChatClient([_priced("first", 0.3)])
+    guard = BudgetGuardClient(inner, cap_usd=1.0)
+    cached = CachingChatClient(guard)
+    p = ChatParams(model="m", seed=1)
+    assert cached.complete(MSGS, p).text == "first"
+    assert cached.complete(MSGS, p).text == "first"  # served from cache, no new spend
+    assert guard.calls == 1
+    assert guard.spent == pytest.approx(0.3)

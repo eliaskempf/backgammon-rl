@@ -99,8 +99,11 @@ def _build_scorer(args):
 
 def _build_client(args):
     if args.live:
+        from dotenv import load_dotenv
+
         from bgrl.llm.client import OpenRouterClient
 
+        load_dotenv()  # pull OPENROUTER_API_KEY from .env if present
         return OpenRouterClient()
     from bgrl.llm.client import FakeChatClient
 

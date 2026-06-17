@@ -43,6 +43,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "numpy" },
+    { name = "python-dotenv" },
     { name = "torch", version = "2.12.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.12.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
 ]
@@ -66,6 +67,7 @@ web = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "numpy", specifier = ">=2.1" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "torch", specifier = ">=2.6", index = "https://download.pytorch.org/whl/cpu" },
 ]
 

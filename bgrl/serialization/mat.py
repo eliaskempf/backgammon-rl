@@ -161,9 +161,7 @@ def match_to_mat(
     for i, (steps, outcome) in enumerate(games, start=1):
         lines.append("")
         lines.extend(
-            _game_block(
-                steps, outcome, number=i, white_name=white_name, black_name=black_name
-            )
+            _game_block(steps, outcome, number=i, white_name=white_name, black_name=black_name)
         )
     return "\n".join(lines) + "\n"
 
