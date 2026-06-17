@@ -281,3 +281,22 @@ array task auto-continue by adding to the sbatch:
 On requeue, SLURM re-runs the same command; `--resume` picks up `latest.pt` and the run
 continues seamlessly until it reaches `--games`. Learning hyperparameters (λ/lr/γ) and
 the net architecture are taken from the checkpoint on resume (CLI divergence warns).
+
+## Hyperparameter sweep + pairwise heatmap (2026-06)
+
+A characterisation sweep of the current TD setup on the EPYC CPU node, with a pairwise
+win-rate heatmap of the resulting agents as the deliverable.
+
+- **Grid (32 runs):** `lr ∈ {0.02,0.05,0.1,0.2}` × `λ ∈ {0.0,0.5,0.7,0.9}` ×
+  `hidden ∈ {64,128}`, seed 0, 1M games each, eval vs pubeval every 25k. Launched as a
+  SLURM array (`slurm/train_sweep.sbatch`, gitignored): one single-core run per task,
+  resumable + requeue-safe, wandb offline (project `backgammon-rl-wp1-sweep`).
+- **New tracked tooling:** `bgrl/training/tournament.py::round_robin` (reuses
+  `play_match`; returns a labelled, anti-symmetric NxN win-rate matrix, diagonal 0.5) +
+  test; `scripts/tournament.py` (loads each run's `best.pt`, labels from checkpoint
+  metadata, appends a `pubeval` anchor, writes `winrate_matrix.csv`);
+  `scripts/plot_heatmap.py` (diverging `RdBu`, vmin/vmax 0/1 → **blue = row beats column,
+  WR > 50%**). New `viz` dependency group (`matplotlib`).
+- **Run order:** sync env + `wandb login --verify` on the login node → `sbatch
+  train_sweep.sbatch` → after completion `aggregate_runs.py` + `wandb sync` → `tournament.py`
+  → `plot_heatmap.py`. See `slurm/README.md` for the exact commands.
