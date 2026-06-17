@@ -4,7 +4,13 @@
 Plays recorded self-play games (or reads an existing ``.mat``), exports them to a
 Jellyfish ``.mat``, drives gnubg to analyse every chequer play, and reports the mean
 **equity loss** vs. gnubg's preferred move plus the move-agreement rate. Lower equity
-loss = stronger play — a clean, standard strength metric.
+loss = stronger play — a clean, standard strength metric, and a lower-variance read on
+move quality than win-rate (every move is graded, not just the game outcome).
+
+Either seat accepts ``llm:<model>`` to put an LLM agent there (e.g.
+``--agent llm:anthropic/claude-haiku-4-5``); the LLM scaffold knobs (``--renderer`` etc.)
+and ``--live``/``--cache``/``--budget-usd`` then apply. Offline (no ``--live``) an LLM
+seat uses a fake first-legal client, so the pipeline can be exercised without a key.
 
 Examples
 --------
@@ -14,6 +20,10 @@ Examples
     # a trained checkpoint as WHITE vs pubeval as BLACK, 5 games
     uv run python scripts/eval_vs_gnubg.py --agent runs/wp1/td_0020000.pt \
         --opponent pubeval --games 5 --seed 1
+
+    # an LLM (WHITE) vs pubeval (BLACK): mean equity loss vs gnubg for the LLM's moves
+    uv run python scripts/eval_vs_gnubg.py --live --agent llm:anthropic/claude-haiku-4-5 \
+        --opponent pubeval --games 10 --renderer pip_list --template coach --budget-usd 2.0
 
     # analyse a .mat we (or anyone) already produced
     uv run python scripts/eval_vs_gnubg.py --mat game.mat
@@ -36,12 +46,12 @@ def _add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--agent",
         default="pubeval",
-        help="WHITE seat: 'pubeval', 'random', or a checkpoint path (default: pubeval)",
+        help="WHITE seat: 'pubeval', 'random', 'llm:<model>', or a checkpoint path",
     )
     parser.add_argument(
         "--opponent",
         default="pubeval",
-        help="BLACK seat: 'pubeval', 'random', or a checkpoint path (default: pubeval)",
+        help="BLACK seat: 'pubeval', 'random', 'llm:<model>', or a checkpoint path",
     )
     parser.add_argument("--games", type=int, default=1, help="self-play games to generate")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed (dice + random agents)")
@@ -49,6 +59,37 @@ def _add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mat", type=Path, help="analyse this existing .mat instead of self-play")
     parser.add_argument("--keep-mat", type=Path, help="write the generated .mat here (else temp)")
     parser.add_argument("--per-move", action="store_true", help="print every move's equity loss")
+    # LLM scaffold knobs — only used when a seat spec is 'llm:<model>'.
+    parser.add_argument(
+        "--renderer",
+        default="pip_list",
+        choices=["ascii", "pip_list", "moves_only", "position_id"],
+    )
+    parser.add_argument("--template", default="coach", choices=["terse", "coach"])
+    parser.add_argument("--format", default="index_text", choices=["index_text", "structured"])
+    parser.add_argument("--reasoning", default="off", choices=["off", "low", "medium", "high"])
+    parser.add_argument("--max-reprompts", type=int, default=2)
+    parser.add_argument(
+        "--fallback", default="first_legal", choices=["first_legal", "random_legal"]
+    )
+    parser.add_argument("--live", action="store_true", help="real OpenRouter API for llm: seats")
+    parser.add_argument("--cache", default=None, help="JSONL response cache for llm: seats")
+    parser.add_argument(
+        "--budget-usd", type=float, default=float("inf"), help="hard cost cap (live llm)"
+    )
+    parser.add_argument(
+        "--max-calls", type=int, default=None, help="hard model-call cap (live llm)"
+    )
+
+
+def _print_llm_stats(llm_stats, guard) -> None:
+    for seat, stats in llm_stats.items():
+        print(
+            f"  [{seat} llm] api_calls={stats.api_calls} invalid_rate={stats.invalid_rate:.3f} "
+            f"fallback_rate={stats.fallback_rate:.3f} reported_cost=${stats.total_cost:.4f}"
+        )
+    if guard is not None:
+        print(f"  billed spend (cache-miss only): ${guard.spent:.4f} over {guard.calls} live calls")
 
 
 def main() -> None:
@@ -61,8 +102,11 @@ def main() -> None:
     import numpy as np
 
     from bgrl.agents import PubevalAgent, RandomAgent
+    from bgrl.agents.llm_agent import AgentStats
     from bgrl.env import RandomDiceSource
     from bgrl.game import play_game
+    from bgrl.llm.build import build_chat_client, build_llm_agent
+    from bgrl.llm.client import BudgetExceededError
     from bgrl.serialization import (
         analyse_mat,
         gnubg_available,
@@ -77,7 +121,38 @@ def main() -> None:
         print("    sudo apt-get install -y gnubg")
         return
 
-    def make_agent(spec: str, rng: np.random.Generator):
+    uses_llm = args.agent.startswith("llm:") or args.opponent.startswith("llm:")
+    chat_client = None
+    guard = None
+    llm_stats: dict[str, AgentStats] = {}
+    if uses_llm:
+        chat_client, guard = build_chat_client(
+            live=args.live,
+            cache_path=args.cache,
+            budget_usd=args.budget_usd,
+            max_calls=args.max_calls,
+        )
+        if not args.live:
+            print(
+                "[dry run] llm: seats use an offline fake client (first-legal); --live for real.\n"
+            )
+
+    def make_agent(spec: str, rng: np.random.Generator, seat: str):
+        if spec.startswith("llm:"):
+            stats = AgentStats()
+            llm_stats[seat] = stats
+            return build_llm_agent(
+                chat_client,
+                model=spec[len("llm:") :],
+                renderer=args.renderer,
+                template=args.template,
+                output_format=args.format,
+                reasoning=args.reasoning,
+                max_reprompts=args.max_reprompts,
+                fallback=args.fallback,
+                rng=rng,
+                stats=stats,
+            )
         if spec == "pubeval":
             return PubevalAgent()
         if spec == "random":
@@ -90,12 +165,19 @@ def main() -> None:
         cleanup: tempfile.TemporaryDirectory | None = None
     else:
         rng = np.random.default_rng(args.seed)
-        white = make_agent(args.agent, np.random.default_rng(args.seed + 1))
-        black = make_agent(args.opponent, np.random.default_rng(args.seed + 2))
+        white = make_agent(args.agent, np.random.default_rng(args.seed + 1), "White")
+        black = make_agent(args.opponent, np.random.default_rng(args.seed + 2), "Black")
         games = []
-        for _ in range(args.games):
-            res = play_game(white, black, RandomDiceSource(rng), record=True)
-            games.append((res.steps, res.outcome))
+        try:
+            for _ in range(args.games):
+                res = play_game(white, black, RandomDiceSource(rng), record=True)
+                games.append((res.steps, res.outcome))
+        except BudgetExceededError as exc:
+            print(f"\nBUDGET CAP HIT during game generation: {exc}")
+            if not games:
+                _print_llm_stats(llm_stats, guard)
+                return
+            print(f"Proceeding to analyse {len(games)} completed game(s).\n")
         mat_text = match_to_mat(games, white_name=args.agent, black_name=args.opponent)
         if args.keep_mat is not None:
             args.keep_mat.parent.mkdir(parents=True, exist_ok=True)
@@ -106,7 +188,7 @@ def main() -> None:
             cleanup = tempfile.TemporaryDirectory()
             mat_path = Path(cleanup.name) / "eval.mat"
             mat_path.write_text(mat_text)
-        label = f"{args.agent} (WHITE) vs {args.opponent} (BLACK), {args.games} game(s)"
+        label = f"{args.agent} (WHITE) vs {args.opponent} (BLACK), {len(games)} game(s)"
 
     print(f"Analysing {label} with gnubg at {args.plies}-ply ...")
     moves = analyse_mat(mat_path, plies=args.plies)
@@ -115,6 +197,7 @@ def main() -> None:
 
     if not moves:
         print("gnubg returned no analysed chequer plays.")
+        _print_llm_stats(llm_stats, guard)
         return
 
     if args.per_move:
@@ -136,6 +219,7 @@ def main() -> None:
                 f"  {side:<8} {s.moves:4d} moves   "
                 f"mean loss {s.mean_equity_loss:7.4f}   agreement {s.agreement:6.1%}"
             )
+    _print_llm_stats(llm_stats, guard)
 
 
 if __name__ == "__main__":

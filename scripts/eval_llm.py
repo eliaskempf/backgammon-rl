@@ -3,9 +3,9 @@
 
 Offline by default: a network-free fake client that always plays the first legal
 move, so the wiring runs with no key and no cost. Pass ``--live`` (with
-``OPENROUTER_API_KEY`` available — exported or in ``.env``) to play with a real model.
-A hard ``--budget-usd`` / ``--max-calls`` cap aborts mid-match with partial stats
-rather than overspending, and ``--cache`` reuses paid responses across runs.
+``OPENROUTER_API_KEY`` available — exported or in a local dotenv file) to play with a
+real model. A hard ``--budget-usd`` / ``--max-calls`` cap aborts mid-match with partial
+stats rather than overspending, and ``--cache`` reuses paid responses across runs.
 
 Reports the CRN win-rate (variance-cancelled, see ``bgrl.training.evaluate``) plus the
 agent's harness stats: API calls, re-prompts, invalid-response and fallback rates, and
@@ -36,12 +36,28 @@ def main() -> None:
 
     import numpy as np
 
+    from bgrl.llm.build import build_chat_client, build_llm_agent
     from bgrl.llm.client import BudgetExceededError
     from bgrl.training.evaluate import play_match
 
-    client, guard = _build_client(args)
+    client, guard = build_chat_client(
+        live=args.live,
+        cache_path=args.cache,
+        budget_usd=args.budget_usd,
+        max_calls=args.max_calls,
+    )
     rng = np.random.default_rng(args.seed)
-    agent = _build_llm_agent(client, args, fallback_rng=np.random.default_rng(args.seed + 1))
+    agent = build_llm_agent(
+        client,
+        model=args.model,
+        renderer=args.renderer,
+        template=args.template,
+        output_format=args.format,
+        reasoning=args.reasoning,
+        max_reprompts=args.max_reprompts,
+        fallback=args.fallback,
+        rng=np.random.default_rng(args.seed + 1),
+    )
     opponent, opp_name = _build_opponent(args.opponent, rng)
 
     if not args.live:
@@ -61,52 +77,6 @@ def main() -> None:
     _print_stats(agent.stats, guard)
 
 
-def _build_client(args):
-    """Build the client stack ``Caching(BudgetGuard(real))`` so cache hits stay free."""
-    from bgrl.llm.client import CachingChatClient, ResponseCache
-
-    guard = None
-    if args.live:
-        from dotenv import load_dotenv
-
-        from bgrl.llm.client import BudgetGuardClient, OpenRouterClient
-
-        load_dotenv()  # pull OPENROUTER_API_KEY from .env if present
-        guard = BudgetGuardClient(
-            OpenRouterClient(), cap_usd=args.budget_usd, max_calls=args.max_calls
-        )
-        client = guard
-    else:
-        from bgrl.llm.client import FakeChatClient
-
-        client = FakeChatClient(responder=lambda messages, params: "0")
-
-    cache = ResponseCache(args.cache) if args.cache else None
-    if cache is not None or args.live:
-        client = CachingChatClient(client, cache)
-    return client, guard
-
-
-def _build_llm_agent(client, args, *, fallback_rng):
-    from bgrl.agents.llm_agent import Fallback, LLMAgent
-    from bgrl.llm.parse import OutputFormat
-    from bgrl.llm.prompt import ALL_TEMPLATES
-    from bgrl.llm.render import ALL_RENDERERS
-
-    return LLMAgent(
-        client,
-        model=args.model,
-        renderer=ALL_RENDERERS[args.renderer],
-        template=ALL_TEMPLATES[args.template],
-        output_format=OutputFormat(args.format),
-        reasoning=_reasoning(args.reasoning),
-        seed=0,
-        max_reprompts=args.max_reprompts,
-        fallback=Fallback(args.fallback),
-        rng=fallback_rng,
-    )
-
-
 def _build_opponent(spec, rng):
     from bgrl.agents import PubevalAgent, RandomAgent
 
@@ -117,10 +87,6 @@ def _build_opponent(spec, rng):
     from bgrl.serialization import load_agent, load_checkpoint
 
     return load_agent(load_checkpoint(Path(spec))), spec
-
-
-def _reasoning(option):
-    return None if option == "off" else {"effort": option}
 
 
 def _print_stats(stats, guard):
