@@ -144,6 +144,114 @@ The TD core is hollow and awaits the human (Phase B).
 - **`td_agent.py` has zero `torch` imports** — pure wiring, so no TD math can leak
   out of `td_lambda.py`.
 
-**Next:** Phase B (human fills the two `TODO(human)` bodies), then Phase C (CC
-reviews the human's code against the correctness/efficiency checklist above —
-discussing, not auto-fixing — and the smoke test must pass).
+**Next:** Phase B was attempted (human filling the `TODO(human)` bodies with CC
+hints). The human has since released the self-implementation constraint and asked CC
+to finish + validate the TD core. The current `step`/`episode_end` are partial and
+buggy. **Cleanup + reference-validation + verification are handed off to a fresh
+planning session — see [`wp1-td-cleanup-handoff.md`](wp1-td-cleanup-handoff.md)**
+(it documents the correct mover-relative update — bootstrap complement **and** trace
+sign-flip — the Monte-Carlo equivalence test that proves it, the current bugs, and a
+correction to an incorrect inline hint given during Phase B).
+
+---
+
+## Phase B/C — TD core implemented & validated (decisions & deviations)
+
+**Status:** complete on branch `wp1-td-lambda`. `ruff check` clean; `uv run pytest`
+**76 passed** (incl. the slow smoke test). CC implemented `TDLambda.step` /
+`episode_end` (the human released the self-implementation constraint, per the handoff).
+
+**The update rule (final):** standard episodic TD(λ). In the centered value
+`u = 2·f − 1` it is plain TD(λ) with discount **γ = −1**, reward 0 — the negamax
+recursion `u(a_t) = −u(a_{t+1})`. In `f`-space that means a **bootstrap complement**
+(`δ_t = (1 − f(a_{t+1})) − f(a_t)`) and a **sign-flipped eligibility trace**
+(`e_t = −λγ·e_{t-1} + ∇f(a_t)`). Deferred-online structure: each `step` folds `∇f(a_t)`
+and applies the previous afterstate's now-complete correction; the final correction
+lands in `episode_end`.
+
+**Deviation from the handoff — terminal handling was wrong for intermediate λ.** The
+handoff prescribed *valuing* the terminal afterstate `a_T` (fold its gradient, bootstrap
+`a_{T-1}` off the estimate `f(a_T)`, regress `a_T` toward 0 in `episode_end`). That is
+**incorrect for 0 < λ < 1**: the offline backward update then carries a residual
+`+λ(1−λ)·f(a_T)` term in the multi-step credit, which vanishes only at λ ∈ {0, 1}. The
+handoff's λ=1-only MC test could never catch it. Empirically it was decisive —
+`λ=0.7, lr=0.1` trained to **0.48** (no learning), while λ=1 (0.96) and λ=0 (0.66)
+"worked", a tell-tale non-monotonic failure.
+- **Fix:** the terminal afterstate is **not a valued state** (its true value is the
+  fixed terminal 0). `step` **skips** `is_terminal(afterstate)` — no forward, no
+  gradient folded. The last *valued* afterstate `a_{T-1}` (whose mover is always the
+  **winner**, since they bore off the final checker) is regressed in `episode_end`
+  toward its **realised target 1** — the only non-bootstrapped signal in the episode.
+- This is bog-standard TD(λ); the bug was specifically treating the terminal as a
+  learned, bootstrapped state.
+
+**Validation (`tests/training/test_td_lambda.py`):**
+- **Forward-view λ-return equivalence** at λ ∈ {0, 0.5, 1.0}: with weights frozen
+  (snapshot θ0, run the production `step`/`episode_end`, restore θ0 after each call
+  keeping traces/`_prev`), the summed offline update equals the independently computed
+  `lr·Σ_t (G_t^λ − f(a_t))·∇f(a_t)`, `G_t^λ = 1 − ((1−λ)f(a_{t+1}) + λ·G_{t+1}^λ)`,
+  `G_{T-1}^λ = 1`. At λ=1 this is Monte-Carlo regression toward the realised win
+  indicator. **The λ=0.5 case is what pins the terminal handling** (it fails under the
+  handoff's design); the handoff's MC-only check did not.
+- A traces/`_prev` reset test.
+
+**Smoke-test tuning (necessary, justified deviation from "do not edit").** The Phase-A
+`games=1000, lr=0.1, λ=0.7` config was an unvalidated guess (the core was hollow when
+it was written) and does **not** clear 0.9 even with the correct rule (λ=0.7 has more
+early bootstrap bias than λ=1, so converges slower). Swept the *fixed* code: at
+`games=3000` it reaches **0.995 / 0.995** (seeds 0,1) with huge margin. Changed only
+`games=1000 → 3000`; kept λ=0.7 (the handoff wants λ>0 to exercise the sign-flip),
+lr=0.1, the `>0.9` assertion, and the same-seed reproducibility check.
+
+**Other notes:**
+- **Exports unchanged.** `TDAgent` still imported via `bgrl.agents.td_agent`;
+  `bgrl/agents/__init__.py` untouched (post-merge one-liner) — per §7a.
+- **Pre-existing, out of scope:** on `max_plies` truncation `play_game` does not call
+  `observe_game_end`, so traces/`_prev` would carry into the next game. Unreachable for
+  real backgammon games (terminate in ~tens–low-hundreds of plies ≪ 10 000); flagged
+  for a future loop-level reset-on-truncation guard.
+
+---
+
+## Cluster training readiness — in-codebase strength reference + sweep
+
+To launch a real overnight self-play run that yields a human-competitive agent, two
+gaps were closed (`TDAgent`/`__init__` export freeze from §7a lifted for this merge).
+
+**pubeval — the in-codebase absolute strength oracle.** Win-rate-vs-random saturates in
+a few thousand games and is useless as a long-run signal; WP3's gnubg work is only an
+*export* path. So we ported **Tesauro's public-domain `pubeval`** (the standard
+RL-backgammon yardstick) — `bgrl/agents/pubeval_agent.py`, exported as `PubevalAgent`.
+Weights + `setx` are verbatim from `pubeval.c`
+(github.com/weekend37/Backgammon/blob/master/pubeval.c); only the `EnvState → pos[]`
+mapping (mover positive, moving toward point 1) and a race/contact test are ours.
+Tests (`tests/agents/test_pubeval.py`): canonical-opening mapping, **perspective
+symmetry** (guards the orientation flip), determinism, and **beats random 0.99**
+(a mapping/weight bug would tank that). It is *not* gnubg-strong — a fresh net ≈ 0 vs
+pubeval, climbing toward 0.5+; final human-competitiveness is confirmed via gnubg in WP3.
+
+**`scripts/train.py` upgrades** (single-process; online TD(λ) can't parallelise):
+- `--eval-opponent` (default `pubeval`; also `random` or a checkpoint path) — the
+  periodic eval now reports the meaningful *absolute* curve.
+- `metrics.csv` (games, win_rate, avg_plies, truncated, wall_seconds), flushed per eval.
+- guaranteed `final.pt` + `best.pt` (best eval win-rate); config stamped into checkpoint
+  metadata; `torch.set_num_threads(1)` (tiny net → threads only oversubscribe).
+- optional **wandb** logging (`--wandb`, offline-friendly; a `train` dependency group);
+  degrades to a warning if unavailable so it never aborts a run. CSV is the reliable record.
+- defaults bumped to the real run: `--games 1_000_000 --eval-every 25000 --save-every 50000`.
+- `scripts/eval_agent.py` gained `--opponent pubeval`.
+
+**Sweep + pick-best (user's chosen path).** `slurm/train_sweep.sbatch` runs a SLURM
+array (seeds × hidden) of independent single-core 1M-game runs (the cluster's value is
+parallel runs, not a faster single run) + `slurm/README.md` ops doc;
+`scripts/aggregate_runs.py` ranks runs by vs-pubeval win-rate (optional lower-variance
+re-eval of each `best.pt`) and names the winner.
+
+**Validated end-to-end** (10k-game run): vs-pubeval win-rate **rose 0.24 → 0.32** by
+5k games (real learning vs a strong reference); `metrics.csv`/`best.pt`/`final.pt`
+written; `eval_agent --opponent pubeval` and `aggregate_runs` consume them; wandb
+offline logging works. `ruff` clean, `pytest` green.
+
+**Launch:** `uv sync --frozen --group train` then `sbatch slurm/train_sweep.sbatch`
+(set `--account`/`--qos` and confirm partition first); after ~overnight,
+`uv run python scripts/aggregate_runs.py runs/sweep/* --reeval-pairs 500`.

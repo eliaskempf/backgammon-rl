@@ -1,10 +1,9 @@
 """End-to-end TD(λ) training smoke test — self-activates once the core is filled.
 
-The TD core is hollow in Phase A (``TDLambda.step`` raises ``NotImplementedError``),
-so this is skipped until the human implements it in Phase B; then it runs
-automatically and must show training beating ``RandomAgent`` decisively and
-reproducibly. Marked ``slow`` (it trains ~1000 games), so the default ``-q`` run
-leaves it out unless slow tests are selected.
+With the TD core implemented, self-play training must beat ``RandomAgent``
+decisively and reproducibly. The ``_td_core_ready`` gate (kept as a guard) skips the
+test only while ``TDLambda.step`` is a hollow ``NotImplementedError`` stub. Marked
+``slow`` (it trains ~3000 games); run with ``-m slow`` to include it.
 """
 
 import numpy as np
@@ -47,7 +46,7 @@ def _final_win_rate_vs_random(seed: int) -> float:
     train_rng, eval_rng = np.random.default_rng(seed).spawn(2)
     net = MLPValueNet(hidden=40)
     agent = TDAgent(net, lam=0.7, lr=0.1)
-    train(agent, games=1000, rng=train_rng)
+    train(agent, games=3000, rng=train_rng)
     # Evaluate the trained weights with a fresh non-learning ValueAgent.
     return play_match(ValueAgent(net), RandomAgent(eval_rng), pairs=100, rng=eval_rng).win_rate_a
 

@@ -18,7 +18,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="CRN win-rate evaluation for a checkpoint.")
     parser.add_argument("--checkpoint", type=Path, required=True, help="agent A checkpoint (.pt)")
     parser.add_argument(
-        "--opponent", default="random", help="agent B: 'random' or a path to another checkpoint"
+        "--opponent",
+        default="pubeval",
+        help="agent B: 'pubeval', 'random', or a path to another checkpoint",
     )
     parser.add_argument("--pairs", type=int, default=200, help="CRN game-pairs to play")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed (dice + random opponent)")
@@ -26,13 +28,16 @@ def main() -> None:
 
     import numpy as np
 
-    from bgrl.agents import RandomAgent
+    from bgrl.agents import PubevalAgent, RandomAgent
     from bgrl.serialization import load_agent, load_checkpoint
     from bgrl.training.evaluate import play_match
 
     rng = np.random.default_rng(args.seed)
     agent_a = load_agent(load_checkpoint(args.checkpoint))
-    if args.opponent == "random":
+    if args.opponent == "pubeval":
+        agent_b = PubevalAgent()
+        opp_name = "pubeval"
+    elif args.opponent == "random":
         agent_b = RandomAgent(rng)
         opp_name = "random"
     else:
