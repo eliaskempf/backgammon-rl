@@ -5,8 +5,8 @@ The board stays in **absolute** coordinates (CLAUDE.md §6): we never flip it to
 mover-relative view here; the frontend renders from absolute indices.
 
 ``move_notation`` is a *display* helper only. The authoritative Jellyfish ``.mat``
-notation (with hit marks, chained-checker collapsing, and the match header) is WP3
-Part B's ``bgrl/serialization/notation.py`` — not this.
+notation (with hit marks and the match header) lives in
+:mod:`bgrl.serialization.mat` — not this.
 """
 
 from __future__ import annotations

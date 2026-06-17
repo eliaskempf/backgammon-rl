@@ -12,12 +12,21 @@ from .checkpoint import (
     load_net,
     save_checkpoint,
 )
+from .gnubg import MoveAnalysis, SideSummary, analyse_mat, gnubg_available, summarize
+from .mat import game_to_mat, match_to_mat
 
 __all__ = [
     "CHECKPOINT_FORMAT_VERSION",
     "NET_REGISTRY",
+    "MoveAnalysis",
+    "SideSummary",
+    "analyse_mat",
+    "game_to_mat",
+    "gnubg_available",
     "load_agent",
     "load_checkpoint",
     "load_net",
+    "match_to_mat",
     "save_checkpoint",
+    "summarize",
 ]

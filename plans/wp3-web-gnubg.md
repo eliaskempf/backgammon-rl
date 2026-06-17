@@ -93,9 +93,40 @@ surface "agent move vs. gnubg's preferred move + equity loss."
 
 Split into **two PRs** (disjoint subtrees; independently reviewable):
 - **PR1 — Part A (web + UI): DONE** on branch `wp3-web-ui` (off `main`, rebased onto WP1).
-- **PR2 — Part B (gnubg export + analysis): not started**, to be done in its own session
-  on `wp3-gnubg-export`. gnubg will be installed (`apt-get install gnubg`) and the live
-  round-trip + equity-loss report validated in-session.
+- **PR2 — Part B (gnubg export + analysis): DONE** on branch `wp3-gnubg-export` (off `main`,
+  now incl. WP1 + Part A + WP4). gnubg 1.07 installed; live `.mat` round-trip + a real
+  equity-loss report validated in-session.
+
+### Part B decisions (implemented)
+- **`.mat` writer** in `bgrl/serialization/mat.py` (`game_to_mat` / `match_to_mat`), consuming
+  the recorded `bgrl.game.Step` trajectory (same type for web `GameSession` and self-play
+  `play_game(record=True)`). Per-player 1..24 numbering (each side counts from its own home);
+  `bar`/`off` keywords; `*` hit marks (detected by replaying submoves through
+  `apply_submove`); forced pass → bare dice; cubeless games exported as a `0 point match`,
+  with the win line recording magnitude (single/gammon/backgammon = 1/2/3 points).
+- **`.mat` format pinned empirically against gnubg's own `export match mat`** (the format has
+  no formal spec). Two details were load-bearing and *had* to be discovered live: (1) the
+  **player-names line `<name> : <score>` sits right after `Game N`** — with a bare-name line or
+  the names in the match header, gnubg silently fails to load *any* match; (2) the match header
+  is ` 0 point match` (leading space). gnubg accepts `bar`/`off` (it re-exports them as `25`/`0`)
+  and reorders submoves within a play. Verified: a 96-ply game round-trips with **0 warnings**,
+  all 96 moves parsed, and the recorded result matches our `Outcome`.
+- **Analysis via gnubg's embedded Python** (`gnubg -t -q -p script`, inputs via env vars):
+  `bgrl/serialization/gnubg.py` runs `import mat; analyse match`, walks `gnubg.match()` and
+  dumps JSON. Schema (gnubg 1.07): each move action has `player` `X`/`O`, `dice`, and an
+  `analysis` dict with `moves` (candidates best-first, each `{move:[[from,to]...], score}`) and
+  `imove` (index played) → equity loss = `moves[0].score − moves[imove].score`. Chosen over
+  text-export parsing for exact numeric equities + gnubg's preferred move directly.
+- **`gnubg_available()`** gates everything; the pipeline + its tests skip cleanly without gnubg.
+  `scripts/eval_vs_gnubg.py` generates self-play games (or reads a `.mat`), reports per-move
+  equity loss + per-side mean loss + gnubg-move agreement. No new Python dep (gnubg is a system
+  binary). `/export_mat` (was 501) now returns `ExportMatResponse{filename, mat}`.
+- **Ply convention (CLAUDE.md §9):** `--plies` is gnubg's own count (raw net = 0-ply), which is
+  also our internal convention — no translation at this boundary.
+- **Tests:** `tests/serialization/test_mat.py` (pure: notation, hit/bar/off tokens, column-merge
+  regression, structure) + `tests/serialization/test_gnubg.py` (live round-trip + analysis,
+  behind `skipif(not gnubg_available())` + `slow`); web `/export_mat` round-trip test. All green,
+  ruff clean.
 
 ### Part A decisions (implemented)
 - **Backend:** FastAPI app factory `create_app()` in `bgrl/web/` (`schemas`, `views`,
@@ -103,7 +134,7 @@ Split into **two PRs** (disjoint subtrees; independently reviewable):
   the sole legality boundary — handlers never reason about legality, the env does.
 - **API (frozen contract, pydantic):** `POST /new_game`, `POST /roll`,
   `GET /legal_moves`, `POST /move` (by `move_id`; stale/illegal → 409),
-  `POST /agent_move`, `GET /checkpoints`, `POST /export_mat` (501 until PR2). State is
+  `POST /agent_move`, `GET /checkpoints`, `POST /export_mat` (implemented in PR2). State is
   projected in **absolute** coordinates; never mover-relative.
 - **Incremental human move:** the frontend filters the full legal-`Move` list by the
   chosen submove prefix (no partial-legality endpoint); a complete prefix submits its

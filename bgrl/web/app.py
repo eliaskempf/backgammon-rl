@@ -14,11 +14,13 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from bgrl.env import RandomDiceSource, SubMove
+from bgrl.env import Player, RandomDiceSource, SubMove
+from bgrl.serialization import game_to_mat
 from bgrl.web.agents import UnknownOpponent, list_checkpoints, make_opponent
 from bgrl.web.schemas import (
     AgentMoveResponse,
     CheckpointsResponse,
+    ExportMatResponse,
     GameIdRequest,
     LegalMovesResponse,
     MoveRequest,
@@ -163,10 +165,23 @@ def create_app(
                 outcome=outcome_view(session.outcome),
             )
 
-    @app.post("/export_mat")
-    def export_mat(req: GameIdRequest) -> dict[str, str]:
-        get_session(req.game_id)  # 404 if unknown
-        raise HTTPException(501, ".mat export lands in WP3 Part B")
+    @app.post("/export_mat", response_model=ExportMatResponse)
+    def export_mat(req: GameIdRequest) -> ExportMatResponse:
+        session = get_session(req.game_id)
+        with session.lock:
+            # The env always opens with WHITE, so WHITE is .mat player 1; name the
+            # seats from who sat where (human seat vs. the chosen opponent).
+            if session.human_seat is Player.WHITE:
+                white_name, black_name = "human", session.opponent_name
+            else:
+                white_name, black_name = session.opponent_name, "human"
+            mat = game_to_mat(
+                session.steps,
+                session.outcome,
+                white_name=white_name,
+                black_name=black_name,
+            )
+        return ExportMatResponse(filename=f"game-{session.game_id}.mat", mat=mat)
 
     static_path = Path(static_dir) if static_dir is not None else DEFAULT_STATIC_DIR
     if static_path.is_dir():

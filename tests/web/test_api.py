@@ -120,7 +120,24 @@ def test_empty_checkpoints_dir_lists_nothing(client):
     assert client.get("/checkpoints").json()["checkpoints"] == []
 
 
-def test_export_mat_not_implemented_yet(client):
-    ng = client.post("/new_game", json={"human_color": "white", "opponent": "random"}).json()
+def test_export_mat_returns_a_gnubg_importable_match(client):
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "seed": 7}
+    ).json()
+    terminal, _ = _run_game(client, ng)
+    assert terminal
+
     resp = client.post("/export_mat", json={"game_id": ng["game_id"]})
-    assert resp.status_code == 501
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["filename"].endswith(".mat")
+    mat = body["mat"]
+    assert mat.startswith(" 0 point match")
+    assert " Game 1" in mat
+    assert "Wins" in mat  # a finished game records its result
+    # human sat WHITE (.mat player 1); the random opponent is named on the other side.
+    assert "human : 0" in mat and "random : 0" in mat
+
+
+def test_export_mat_unknown_game_returns_404(client):
+    assert client.post("/export_mat", json={"game_id": "nope"}).status_code == 404

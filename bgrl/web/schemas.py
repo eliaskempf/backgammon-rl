@@ -146,3 +146,10 @@ class AgentMoveResponse(BaseModel):
 
 class CheckpointsResponse(BaseModel):
     checkpoints: list[CheckpointInfo]
+
+
+class ExportMatResponse(BaseModel):
+    """A played game serialized to Jellyfish ``.mat`` text (gnubg-importable)."""
+
+    filename: str  # suggested download name, e.g. ``game-<id>.mat``
+    mat: str  # the full .mat file contents
