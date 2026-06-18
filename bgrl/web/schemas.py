@@ -91,6 +91,27 @@ class NewGameRequest(BaseModel):
     opponent: str = "random"
     seed: int | None = None
     manual_dice: bool = False  # human supplies every roll (both seats); see RollRequest
+    # Opponent search depth (gnubg convention: 0 = raw net = greedy ValueAgent). Capped
+    # at 2 because exact deeper search is impractically slow for interactive play; a
+    # checkpoint opponent at >=1 ply is wrapped in WP2 expectimax. Ignored for "random".
+    expectimax_plies: int = 0
+    # Candidate pruning for the search (None = exact). Required in practice for 2-ply to
+    # stay interactive (exact 2-ply is minutes/move); the frontend always sends one there.
+    expectimax_top_k: int | None = None
+
+    @field_validator("expectimax_plies")
+    @classmethod
+    def _plies_in_range(cls, plies: int) -> int:
+        if not 0 <= plies <= 2:
+            raise ValueError("expectimax_plies must be 0, 1, or 2")
+        return plies
+
+    @field_validator("expectimax_top_k")
+    @classmethod
+    def _top_k_positive(cls, top_k: int | None) -> int | None:
+        if top_k is not None and top_k < 1:
+            raise ValueError("expectimax_top_k must be >= 1 or null")
+        return top_k
 
 
 class GameIdRequest(BaseModel):

@@ -4,6 +4,7 @@ import { ApiError, api } from "./api";
 import Board, { type GlideAnim } from "./Board";
 import { applySubmoves } from "./game";
 import {
+  type AgentMoveResponse,
   type CheckpointInfo,
   type Color,
   type MoveView,
@@ -110,12 +111,15 @@ export default function App() {
   const [formOpponent, setFormOpponent] = useState("random");
   const [formSeed, setFormSeed] = useState("");
   const [formManual, setFormManual] = useState(false);
+  const [formPlies, setFormPlies] = useState(0); // opponent search depth (0/1/2)
+  const [formTopK, setFormTopK] = useState(4); // candidate pruning for 2-ply
   const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([]);
 
   // Live game.
   const [gameId, setGameId] = useState<string | null>(null);
   const [humanColor, setHumanColor] = useState<Color>("white");
   const [opponentName, setOpponentName] = useState("random");
+  const [plies, setPlies] = useState(0); // active opponent search depth, for display
   const [manual, setManual] = useState(false);
   const [view, setView] = useState<StateView | null>(null);
   const [toAct, setToAct] = useState<Color>("white");
@@ -138,6 +142,19 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastAgentMove, setLastAgentMove] = useState<MoveView | null>(null);
+  const [agentThinking, setAgentThinking] = useState(false); // a search is in flight
+  const [showThinking, setShowThinking] = useState(false); // gated so fast moves don't flash
+
+  // Only surface the "thinking" overlay once a search has run long enough to notice — a
+  // 0/1-ply reply returns in well under this, so it never flashes; 2-ply lingers and shows.
+  useEffect(() => {
+    if (!agentThinking) {
+      setShowThinking(false);
+      return;
+    }
+    const t = setTimeout(() => setShowThinking(true), 200);
+    return () => clearTimeout(t);
+  }, [agentThinking]);
 
   useEffect(() => {
     api
@@ -185,7 +202,13 @@ export default function App() {
       let done = startTerminal;
       let board = startBoard;
       while (!done && turn === oppColor) {
-        const a = await api.agentMove(gid);
+        setAgentThinking(true);
+        let a: AgentMoveResponse;
+        try {
+          a = await api.agentMove(gid);
+        } finally {
+          setAgentThinking(false);
+        }
         setLastAgentMove(a.move);
         setDice(a.dice); // reveal the opponent's roll first
         if (a.move && a.move.submoves.length) {
@@ -219,15 +242,20 @@ export default function App() {
     setError(null);
     try {
       const seed = formSeed.trim() === "" ? null : Number(formSeed);
+      // "random" has no value net, so search depth is moot — send 0; top_k only bites at 2-ply.
+      const usePlies = formOpponent === "random" ? 0 : formPlies;
       const ng = await api.newGame({
         human_color: formColor,
         opponent: formOpponent,
         seed,
         manual_dice: formManual,
+        expectimax_plies: usePlies,
+        expectimax_top_k: usePlies === 2 ? formTopK : null,
       });
       setGameId(ng.game_id);
       setHumanColor(ng.human_color);
       setOpponentName(ng.opponent);
+      setPlies(usePlies);
       setManual(ng.manual_dice);
       setView(ng.state);
       setToAct(ng.to_act);
@@ -252,7 +280,7 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [formColor, formOpponent, formSeed, formManual, runAgent]);
+  }, [formColor, formOpponent, formSeed, formManual, formPlies, formTopK, runAgent]);
 
   const submitMove = useCallback(
     async (moveId: number) => {
@@ -314,7 +342,13 @@ export default function App() {
       setError(null);
       try {
         const board = view;
-        const a = await api.agentMove(gameId, suppliedDice);
+        setAgentThinking(true);
+        let a: AgentMoveResponse;
+        try {
+          a = await api.agentMove(gameId, suppliedDice);
+        } finally {
+          setAgentThinking(false);
+        }
         setLastAgentMove(a.move);
         setDice(a.dice);
         if (a.move && a.move.submoves.length) {
@@ -517,6 +551,31 @@ export default function App() {
             ))}
           </select>
         </label>
+        <label title="Opponent search depth (gnubg convention: 0-ply = raw net). Deeper plays stronger but slower; 2-ply takes a moment per move.">
+          AI search{" "}
+          <select
+            value={formPlies}
+            onChange={(e) => setFormPlies(Number(e.target.value))}
+            disabled={formOpponent === "random"}
+          >
+            <option value={0}>0-ply (greedy)</option>
+            <option value={1}>1-ply</option>
+            <option value={2}>2-ply (slow)</option>
+          </select>
+        </label>
+        {formPlies === 2 && formOpponent !== "random" && (
+          <label title="2-ply searches only the top-K candidate moves deeper; lower is faster but weaker.">
+            Candidates{" "}
+            <input
+              className="num-input"
+              type="number"
+              min={1}
+              max={10}
+              value={formTopK}
+              onChange={(e) => setFormTopK(Number(e.target.value))}
+            />
+          </label>
+        )}
         <label>
           Seed{" "}
           <input
@@ -550,18 +609,28 @@ export default function App() {
       {error && <div className="error">⚠ {error}</div>}
 
       {view && (
-        <Board
-          state={preview ?? view}
-          sources={humanTurn ? sources : new Set()}
-          glowPoint={glowPoint}
-          dice={displayedDice}
-          diceColor={diceColor}
-          diceSpent={diceSpent}
-          diceRemaining={diceRemaining}
-          animation={animation}
-          onPick={onPick}
-          onFlipDice={canFlip ? () => setDiceSwapped((s) => !s) : undefined}
-        />
+        <div className="board-wrap">
+          <Board
+            state={preview ?? view}
+            sources={humanTurn ? sources : new Set()}
+            glowPoint={glowPoint}
+            dice={displayedDice}
+            diceColor={diceColor}
+            diceSpent={diceSpent}
+            diceRemaining={diceRemaining}
+            animation={animation}
+            onPick={onPick}
+            onFlipDice={canFlip ? () => setDiceSwapped((s) => !s) : undefined}
+          />
+          {showThinking && (
+            <div className="thinking-overlay">
+              <div className="thinking-spinner" />
+              <div className="thinking-label">
+                Opponent thinking{plies >= 1 ? ` · ${plies}-ply` : ""}…
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {gameId && !terminal && (

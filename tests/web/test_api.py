@@ -116,6 +116,32 @@ def test_checkpoint_opponent_is_listed_and_playable(tmp_path):
     assert agent["move"] is not None and agent["dice"][0] in range(1, 7)
 
 
+def test_expectimax_opponent_plays_and_reports_win_prob(tmp_path):
+    save_checkpoint(MLPValueNet(hidden=8), tmp_path / "tiny.pt", trained_with="random")
+    client = TestClient(create_app(checkpoints_dir=tmp_path))
+    ng = client.post(
+        "/new_game",
+        json={
+            "opponent": "tiny",
+            "manual_dice": True,
+            "expectimax_plies": 2,  # wraps the net in 2-ply WP2 expectimax
+            "expectimax_top_k": 2,  # tight pruning keeps the test fast
+        },
+    ).json()
+    gid = ng["game_id"]
+    client.post("/roll", json={"game_id": gid, "dice": [3, 1]})
+    moves = client.get("/legal_moves", params={"game_id": gid}).json()["moves"]
+    client.post("/move", json={"game_id": gid, "move_id": moves[0]["id"]})
+    agent = client.post("/agent_move", json={"game_id": gid, "dice": [5, 2]}).json()
+    assert agent["move"] is not None  # the searching opponent actually moved
+    assert agent["win_prob"] is not None and 0.0 <= agent["win_prob"] <= 1.0
+
+
+def test_new_game_rejects_out_of_range_plies(client):
+    r = client.post("/new_game", json={"opponent": "random", "expectimax_plies": 3})
+    assert r.status_code == 422
+
+
 def test_empty_checkpoints_dir_lists_nothing(client):
     assert client.get("/checkpoints").json()["checkpoints"] == []
 

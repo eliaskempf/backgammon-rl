@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
+from bgrl.agents.expectimax_agent import ExpectimaxAgent
 from bgrl.agents.value_agent import ValueAgent
 from bgrl.env import EnvState, ManualDiceSource, Player, RandomDiceSource, SubMove
 from bgrl.serialization import game_to_mat
@@ -47,7 +48,7 @@ def _win_prob(session: GameSession, afterstate: EnvState) -> float | None:
     agent's win chance after an agent move — the caller frames it.
     """
     opponent = session.opponent
-    if isinstance(opponent, ValueAgent):
+    if isinstance(opponent, ValueAgent | ExpectimaxAgent):
         return opponent.win_prob(afterstate)
     return None
 
@@ -85,7 +86,13 @@ def create_app(
     def new_game(req: NewGameRequest) -> NewGameResponse:
         dice_rng, agent_rng = make_seed_streams(req.seed)
         try:
-            opponent = make_opponent(req.opponent, checkpoints_dir=ckpt_dir, rng=agent_rng)
+            opponent = make_opponent(
+                req.opponent,
+                checkpoints_dir=ckpt_dir,
+                rng=agent_rng,
+                plies=req.expectimax_plies,
+                top_k=req.expectimax_top_k,
+            )
         except UnknownOpponent:
             raise HTTPException(400, f"unknown opponent {req.opponent!r}") from None
         dice_source = ManualDiceSource() if req.manual_dice else RandomDiceSource(dice_rng)

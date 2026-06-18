@@ -53,6 +53,8 @@ export const api = {
     opponent: string;
     seed: number | null;
     manual_dice: boolean;
+    expectimax_plies: number; // opponent search depth: 0 (greedy net), 1, or 2
+    expectimax_top_k: number | null; // candidate pruning (sent for 2-ply; null = exact)
   }) => post<NewGameResponse>("/new_game", req),
   // `dice` is sent only for manual-dice games (the human supplies every roll).
   roll: (gameId: string, dice?: [number, number]) =>

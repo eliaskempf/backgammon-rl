@@ -246,3 +246,15 @@ def test_constructor_validation():
         ExpectimaxAgent(_FeatureNet(), plies=-1)
     with pytest.raises(ValueError):
         ExpectimaxAgent(_FeatureNet(), top_k=0)
+
+
+# --- 8. win_prob (web display companion) -----------------------------------------------
+
+
+def test_win_prob_matches_value_agent_at_any_depth():
+    net = _FeatureNet()
+    s = Env.initial_state()
+    _, after = Env.legal_moves(s, (3, 1))[0]
+    expected = ValueAgent(net).win_prob(after)
+    for plies in (0, 1, 2):  # search depth doesn't change the net's 0-ply afterstate estimate
+        assert ExpectimaxAgent(net, plies=plies).win_prob(after) == expected

@@ -133,6 +133,16 @@ class ExpectimaxAgent:
         )
         return legal[candidates[self._select(values)]][0]
 
+    def win_prob(self, afterstate: EnvState) -> float:
+        """P(the player who produced ``afterstate`` wins), from the 0-ply net.
+
+        A display companion to :meth:`act` for the web layer (mirrors
+        :meth:`~bgrl.agents.value_agent.ValueAgent.win_prob`). Search depth does not
+        change the net's own estimate of a *given* afterstate, so this delegates to
+        the wrapped 0-ply agent.
+        """
+        return self._value_agent.win_prob(afterstate)
+
     def _eval_pov(self, state: EnvState, depth: int) -> float:
         """Equity of ``state`` to the player to move at it (``state.turn``)."""
         if is_terminal(state):

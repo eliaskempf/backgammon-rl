@@ -2,8 +2,10 @@
 
 ``"random"`` is always available (the dummy opponent WP3 builds against before real
 checkpoints exist); any other name is a checkpoint file ``<name>.pt`` under the
-server's checkpoints directory, loaded through the WP0 ``load_agent`` factory — so
-the server plays *any* trained net without knowing which algorithm produced it.
+server's checkpoints directory, loaded as a value net — so the server plays *any*
+trained net without knowing which algorithm produced it. ``plies``/``top_k`` choose how
+much WP2 expectimax search wraps that net: 0 = the raw 0-ply :class:`ValueAgent`, >=1 =
+n-ply lookahead (``top_k`` prunes candidates so 2-ply stays interactive).
 """
 
 from __future__ import annotations
@@ -12,8 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
-from bgrl.agents import Agent, RandomAgent
-from bgrl.serialization import load_agent, load_checkpoint
+from bgrl.agents import Agent, ExpectimaxAgent, RandomAgent, ValueAgent
+from bgrl.serialization import load_checkpoint, load_net
 from bgrl.web.schemas import CheckpointInfo
 
 RANDOM_OPPONENT = "random"
@@ -23,14 +25,24 @@ class UnknownOpponent(Exception):
     """The requested opponent is neither ``"random"`` nor a known checkpoint."""
 
 
-def make_opponent(name: str, *, checkpoints_dir: Path, rng: np.random.Generator) -> Agent:
+def make_opponent(
+    name: str,
+    *,
+    checkpoints_dir: Path,
+    rng: np.random.Generator,
+    plies: int = 0,
+    top_k: int | None = None,
+) -> Agent:
     if name == RANDOM_OPPONENT:
         return RandomAgent(rng)
     path = checkpoints_dir / f"{name}.pt"
     if not path.is_file():
         raise UnknownOpponent(name)
-    # Deterministic greedy play (rng omitted) for a stable opponent.
-    return load_agent(load_checkpoint(path))
+    net = load_net(load_checkpoint(path))
+    # Deterministic play (rng omitted) for a stable opponent.
+    if plies <= 0:
+        return ValueAgent(net)
+    return ExpectimaxAgent(net, plies=plies, top_k=top_k)
 
 
 def list_checkpoints(checkpoints_dir: Path) -> list[CheckpointInfo]:
