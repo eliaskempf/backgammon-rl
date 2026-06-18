@@ -14,7 +14,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from bgrl.env import Player, RandomDiceSource, SubMove
+from bgrl.agents.value_agent import ValueAgent
+from bgrl.env import EnvState, ManualDiceSource, Player, RandomDiceSource, SubMove
 from bgrl.serialization import game_to_mat
 from bgrl.web.agents import UnknownOpponent, list_checkpoints, make_opponent
 from bgrl.web.schemas import (
@@ -27,12 +28,28 @@ from bgrl.web.schemas import (
     MoveResponse,
     NewGameRequest,
     NewGameResponse,
+    RollRequest,
     RollResponse,
+    UndoResponse,
 )
 from bgrl.web.session import GameError, GameSession, SessionStore, make_seed_streams
 from bgrl.web.views import color_of, move_view, outcome_view, player_of, state_view
 
 DEFAULT_STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _win_prob(session: GameSession, afterstate: EnvState) -> float | None:
+    """Mover's win probability for ``afterstate`` if the opponent has a value net.
+
+    ``None`` for a netless opponent (e.g. random), in which case the UI hides the
+    estimate. The mover here is the player who produced ``afterstate`` (its ``turn``
+    is the opponent), so this is "your win chance" after a human move and the
+    agent's win chance after an agent move — the caller frames it.
+    """
+    opponent = session.opponent
+    if isinstance(opponent, ValueAgent):
+        return opponent.win_prob(afterstate)
+    return None
 
 
 def create_app(
@@ -51,6 +68,15 @@ def create_app(
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown game_id") from None
 
+    def prime_dice(session: GameSession, dice: tuple[int, int] | None) -> None:
+        """Queue the human-entered roll for a manual game; reject a dice/mode mismatch."""
+        if session.is_manual:
+            if dice is None:
+                raise HTTPException(422, "manual-dice game requires explicit dice for each roll")
+            session.supply_dice(dice)
+        elif dice is not None:
+            raise HTTPException(409, "game is not in manual-dice mode; dice are auto-rolled")
+
     @app.get("/checkpoints", response_model=CheckpointsResponse)
     def checkpoints() -> CheckpointsResponse:
         return CheckpointsResponse(checkpoints=list_checkpoints(ckpt_dir))
@@ -62,11 +88,12 @@ def create_app(
             opponent = make_opponent(req.opponent, checkpoints_dir=ckpt_dir, rng=agent_rng)
         except UnknownOpponent:
             raise HTTPException(400, f"unknown opponent {req.opponent!r}") from None
+        dice_source = ManualDiceSource() if req.manual_dice else RandomDiceSource(dice_rng)
         session = store.create(
             opponent=opponent,
             opponent_name=req.opponent,
             human_seat=player_of(req.human_color),
-            dice_source=RandomDiceSource(dice_rng),
+            dice_source=dice_source,
         )
         return NewGameResponse(
             game_id=session.game_id,
@@ -75,14 +102,17 @@ def create_app(
             opponent=req.opponent,
             to_act=color_of(session.to_act),
             needs_roll=session.needs_roll,
+            manual_dice=req.manual_dice,
+            can_undo=session.can_undo,
         )
 
     @app.post("/roll", response_model=RollResponse)
-    def roll(req: GameIdRequest) -> RollResponse:
+    def roll(req: RollRequest) -> RollResponse:
         session = get_session(req.game_id)
         with session.lock:
             if not session.human_to_move:
                 raise HTTPException(409, "not the human's turn to roll")
+            prime_dice(session, req.dice)
             try:
                 dice = session.roll()
             except GameError as exc:
@@ -100,15 +130,20 @@ def create_app(
                 needs_roll=session.needs_roll,
                 terminal=session.terminal,
                 outcome=outcome_view(session.outcome),
+                can_undo=session.can_undo,
             )
 
     @app.get("/legal_moves", response_model=LegalMovesResponse)
     def legal_moves(game_id: str) -> LegalMovesResponse:
         session = get_session(game_id)
         with session.lock:
-            mover = session.state.turn
-            moves = [move_view(i, m, a, mover) for i, (m, a) in enumerate(session.legal)]
-            return LegalMovesResponse(dice=session.dice, moves=moves)
+            state, dice = session.state, session.dice
+            moves = (
+                [move_view(i, m, a, state, dice) for i, (m, a) in enumerate(session.legal)]
+                if dice is not None
+                else []
+            )
+            return LegalMovesResponse(dice=dice, moves=moves)
 
     @app.post("/move", response_model=MoveResponse)
     def move(req: MoveRequest) -> MoveResponse:
@@ -131,6 +166,7 @@ def create_app(
                 session.apply_move(chosen)
             except GameError as exc:
                 raise HTTPException(409, str(exc)) from None
+            # session.state is now the human's afterstate, so this is "your win chance".
             return MoveResponse(
                 ok=True,
                 state=state_view(session.state),
@@ -138,23 +174,30 @@ def create_app(
                 needs_roll=session.needs_roll,
                 terminal=session.terminal,
                 outcome=outcome_view(session.outcome),
+                win_prob=_win_prob(session, session.state),
+                can_undo=session.can_undo,
             )
 
     @app.post("/agent_move", response_model=AgentMoveResponse)
-    def agent_move(req: GameIdRequest) -> AgentMoveResponse:
+    def agent_move(req: RollRequest) -> AgentMoveResponse:
         session = get_session(req.game_id)
         with session.lock:
             if session.terminal:
                 raise HTTPException(409, "game is over")
             if session.human_to_move:
                 raise HTTPException(409, "it is the human's turn")
+            prime_dice(session, req.dice)
             try:
                 session.play_agent()
             except GameError as exc:
                 raise HTTPException(409, str(exc)) from None
             last = session.steps[-1]
-            mover = last.state.turn
-            played = move_view(0, last.move, last.afterstate, mover) if last.move.submoves else None
+            if last.move.submoves:
+                played = move_view(0, last.move, last.afterstate, last.state, last.dice)
+                win_prob = _win_prob(session, last.afterstate)  # the agent's win chance
+            else:
+                played = None  # forced pass
+                win_prob = None
             return AgentMoveResponse(
                 move=played,
                 dice=last.dice,
@@ -163,6 +206,33 @@ def create_app(
                 needs_roll=session.needs_roll,
                 terminal=session.terminal,
                 outcome=outcome_view(session.outcome),
+                win_prob=win_prob,
+                can_undo=session.can_undo,
+            )
+
+    @app.post("/undo", response_model=UndoResponse)
+    def undo(req: GameIdRequest) -> UndoResponse:
+        session = get_session(req.game_id)
+        with session.lock:
+            try:
+                session.undo()
+            except GameError as exc:
+                raise HTTPException(409, str(exc)) from None
+            state, dice = session.state, session.dice
+            moves = (
+                [move_view(i, m, a, state, dice) for i, (m, a) in enumerate(session.legal)]
+                if dice is not None
+                else []
+            )
+            return UndoResponse(
+                state=state_view(state),
+                to_act=color_of(session.to_act),
+                dice=dice,
+                needs_roll=session.needs_roll,
+                terminal=session.terminal,
+                outcome=outcome_view(session.outcome),
+                moves=moves,
+                can_undo=session.can_undo,
             )
 
     @app.post("/export_mat", response_model=ExportMatResponse)

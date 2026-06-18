@@ -50,6 +50,8 @@ def list_checkpoints(checkpoints_dir: Path) -> list[CheckpointInfo]:
                 trained_with=checkpoint.get("trained_with"),
                 games_trained=metadata.get("games_trained"),
                 created_at=metadata.get("created_at"),
+                win_rate=metadata.get("win_rate"),
+                eval_opponent=metadata.get("eval_opponent"),
             )
         )
     return infos

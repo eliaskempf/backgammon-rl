@@ -95,3 +95,29 @@ button:disabled {
   font-size: 0.9rem;
   color: #444;
 }
+
+.winchance {
+  margin: 6px 0;
+  font-size: 0.95rem;
+}
+
+.winchance .muted {
+  color: #777;
+  font-size: 0.85rem;
+}
+
+.diceentry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.diceentry span {
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.diceentry input {
+  width: 3.2rem;
+  text-align: center;
+}

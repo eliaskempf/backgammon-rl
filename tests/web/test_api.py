@@ -120,6 +120,89 @@ def test_empty_checkpoints_dir_lists_nothing(client):
     assert client.get("/checkpoints").json()["checkpoints"] == []
 
 
+# --- sub-move die labels, value estimate, multi-turn undo ---------------------
+
+
+def test_legal_moves_carry_die_labels(client):
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "manual_dice": True}
+    ).json()
+    gid = ng["game_id"]
+    client.post("/roll", json={"game_id": gid, "dice": [3, 1]})
+    moves = client.get("/legal_moves", params={"game_id": gid}).json()["moves"]
+    assert moves
+    for m in moves:
+        assert [sm["die"] for sm in m["submoves"]]  # every submove labelled
+        assert all(sm["die"] in (1, 3) for sm in m["submoves"])
+
+    # Doubles: every submove is labelled with the doubled value.
+    ng2 = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "manual_dice": True}
+    ).json()
+    gid2 = ng2["game_id"]
+    client.post("/roll", json={"game_id": gid2, "dice": [2, 2]})
+    moves2 = client.get("/legal_moves", params={"game_id": gid2}).json()["moves"]
+    assert moves2
+    assert all(sm["die"] == 2 for m in moves2 for sm in m["submoves"])
+
+
+def test_win_prob_present_for_value_net_opponent(tmp_path):
+    save_checkpoint(MLPValueNet(hidden=8), tmp_path / "tiny.pt", trained_with="random")
+    client = TestClient(create_app(checkpoints_dir=tmp_path))
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "tiny", "manual_dice": True}
+    ).json()
+    gid = ng["game_id"]
+    client.post("/roll", json={"game_id": gid, "dice": [3, 1]})
+    moves = client.get("/legal_moves", params={"game_id": gid}).json()["moves"]
+    moved = client.post("/move", json={"game_id": gid, "move_id": moves[0]["id"]}).json()
+    assert moved["win_prob"] is not None and 0.0 <= moved["win_prob"] <= 1.0
+
+    agent = client.post("/agent_move", json={"game_id": gid, "dice": [5, 2]}).json()
+    assert agent["win_prob"] is not None and 0.0 <= agent["win_prob"] <= 1.0
+
+
+def test_win_prob_absent_for_random_opponent(client):
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "manual_dice": True}
+    ).json()
+    gid = ng["game_id"]
+    client.post("/roll", json={"game_id": gid, "dice": [3, 1]})
+    moves = client.get("/legal_moves", params={"game_id": gid}).json()["moves"]
+    moved = client.post("/move", json={"game_id": gid, "move_id": moves[0]["id"]}).json()
+    assert moved["win_prob"] is None
+
+
+def test_undo_reverts_a_full_turn_and_repeats(client):
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "manual_dice": True}
+    ).json()
+    gid = ng["game_id"]
+    assert ng["can_undo"] is False
+
+    rolled = client.post("/roll", json={"game_id": gid, "dice": [3, 1]}).json()
+    assert rolled["can_undo"] is False
+    moves = client.get("/legal_moves", params={"game_id": gid}).json()["moves"]
+    moved = client.post("/move", json={"game_id": gid, "move_id": moves[0]["id"]}).json()
+    assert moved["can_undo"] is True
+    agent = client.post("/agent_move", json={"game_id": gid, "dice": [5, 2]}).json()
+    assert agent["can_undo"] is True and agent["to_act"] == "white"
+
+    undone = client.post("/undo", json={"game_id": gid}).json()
+    assert undone["to_act"] == "white"
+    assert undone["dice"] == [3, 1]  # same roll restored
+    assert undone["moves"]  # legal moves re-enumerated, with die labels
+    assert all(sm["die"] in (1, 3) for m in undone["moves"] for sm in m["submoves"])
+    assert undone["can_undo"] is False
+
+    # Nothing left to undo.
+    assert client.post("/undo", json={"game_id": gid}).status_code == 409
+
+
+def test_undo_unknown_game_is_404(client):
+    assert client.post("/undo", json={"game_id": "nope"}).status_code == 404
+
+
 def test_export_mat_returns_a_gnubg_importable_match(client):
     ng = client.post(
         "/new_game", json={"human_color": "white", "opponent": "random", "seed": 7}
@@ -141,3 +224,86 @@ def test_export_mat_returns_a_gnubg_importable_match(client):
 
 def test_export_mat_unknown_game_returns_404(client):
     assert client.post("/export_mat", json={"game_id": "nope"}).status_code == 404
+
+
+# --- manual-dice mode ---------------------------------------------------------
+
+
+def test_default_game_is_not_manual(client):
+    ng = client.post("/new_game", json={"human_color": "white", "opponent": "random"}).json()
+    assert ng["manual_dice"] is False
+
+
+def test_manual_game_uses_supplied_dice_for_both_seats(client):
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "manual_dice": True}
+    ).json()
+    assert ng["manual_dice"] is True
+    gid = ng["game_id"]
+
+    # The human supplies their own roll; the server returns exactly those dice.
+    rolled = client.post("/roll", json={"game_id": gid, "dice": [3, 1]}).json()
+    assert rolled["dice"] == [3, 1]
+    assert client.get("/legal_moves", params={"game_id": gid}).json()["dice"] == [3, 1]
+
+    moves = client.get("/legal_moves", params={"game_id": gid}).json()["moves"]
+    client.post("/move", json={"game_id": gid, "move_id": moves[0]["id"]})
+
+    # The human also supplies the agent's roll — the agent never touches an RNG.
+    agent = client.post("/agent_move", json={"game_id": gid, "dice": [5, 2]}).json()
+    assert agent["dice"] == [5, 2]
+
+
+def test_manual_roll_without_dice_is_422(client):
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "manual_dice": True}
+    ).json()
+    assert client.post("/roll", json={"game_id": ng["game_id"]}).status_code == 422
+
+
+def test_manual_agent_move_without_dice_is_422(client):
+    # human black -> WHITE (the agent) is to move first, so /agent_move needs dice.
+    ng = client.post(
+        "/new_game", json={"human_color": "black", "opponent": "random", "manual_dice": True}
+    ).json()
+    assert client.post("/agent_move", json={"game_id": ng["game_id"]}).status_code == 422
+
+
+def test_manual_dice_out_of_range_is_422(client):
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "manual_dice": True}
+    ).json()
+    bad = client.post("/roll", json={"game_id": ng["game_id"], "dice": [0, 7]})
+    assert bad.status_code == 422
+
+
+def test_dice_sent_to_auto_game_is_409(client):
+    ng = client.post("/new_game", json={"human_color": "white", "opponent": "random"}).json()
+    bad = client.post("/roll", json={"game_id": ng["game_id"], "dice": [3, 1]})
+    assert bad.status_code == 409
+
+
+def test_manual_game_runs_to_terminal(client):
+    """Drive a full manual game (fixed dice for both seats) to a terminal outcome."""
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "manual_dice": True}
+    ).json()
+    gid, human, to_act = ng["game_id"], ng["human_color"], ng["to_act"]
+    # A doubles-heavy stream keeps games short; any in-range dice are accepted.
+    stream = [[6, 6], [5, 5], [4, 4], [3, 3], [2, 2], [1, 1], [6, 5], [4, 3], [2, 1], [6, 4]]
+    terminal = False
+    for i in range(5000):
+        if terminal:
+            break
+        dice = stream[i % len(stream)]
+        if to_act == human:
+            data = client.post("/roll", json={"game_id": gid, "dice": dice}).json()
+            to_act, terminal = data["to_act"], data["terminal"]
+            if data["auto_pass"] or terminal:
+                continue
+            moves = client.get("/legal_moves", params={"game_id": gid}).json()["moves"]
+            data = client.post("/move", json={"game_id": gid, "move_id": moves[0]["id"]}).json()
+        else:
+            data = client.post("/agent_move", json={"game_id": gid, "dice": dice}).json()
+        to_act, terminal = data["to_act"], data["terminal"]
+    assert terminal

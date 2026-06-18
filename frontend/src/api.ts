@@ -8,6 +8,7 @@ import type {
   MoveResponse,
   NewGameResponse,
   RollResponse,
+  UndoResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -47,13 +48,22 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
 }
 
 export const api = {
-  newGame: (req: { human_color: Color; opponent: string; seed: number | null }) =>
-    post<NewGameResponse>("/new_game", req),
-  roll: (gameId: string) => post<RollResponse>("/roll", { game_id: gameId }),
+  newGame: (req: {
+    human_color: Color;
+    opponent: string;
+    seed: number | null;
+    manual_dice: boolean;
+  }) => post<NewGameResponse>("/new_game", req),
+  // `dice` is sent only for manual-dice games (the human supplies every roll).
+  roll: (gameId: string, dice?: [number, number]) =>
+    post<RollResponse>("/roll", { game_id: gameId, dice }),
   legalMoves: (gameId: string) =>
     get<LegalMovesResponse>("/legal_moves", { game_id: gameId }),
   move: (gameId: string, moveId: number) =>
     post<MoveResponse>("/move", { game_id: gameId, move_id: moveId }),
-  agentMove: (gameId: string) => post<AgentMoveResponse>("/agent_move", { game_id: gameId }),
+  agentMove: (gameId: string, dice?: [number, number]) =>
+    post<AgentMoveResponse>("/agent_move", { game_id: gameId, dice }),
+  // Revert to the human's previous decision (same dice); 409 if nothing to undo.
+  undo: (gameId: string) => post<UndoResponse>("/undo", { game_id: gameId }),
   checkpoints: () => get<CheckpointsResponse>("/checkpoints"),
 };

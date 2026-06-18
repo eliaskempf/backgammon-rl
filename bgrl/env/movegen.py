@@ -78,6 +78,43 @@ def _seq_key(submoves: tuple[SubMove, ...]) -> tuple[tuple[int, int], ...]:
     return tuple((sm.src, sm.dst) for sm in submoves)
 
 
+def move_dice(state: EnvState, dice: Dice, move: Move) -> tuple[int, ...]:
+    """Die value each submove of ``move`` consumes, in submove order.
+
+    ``move`` must be one of the plays :func:`legal_moves` returns for this exact
+    ``(state, dice)``; the result has the same length as ``move.submoves`` (an
+    empty move yields ``()``). Doubles map every entry to the doubled value.
+
+    A bear-off reachable by either die via overshoot (:func:`_can_bear_off_from`)
+    is genuinely ambiguous, so the dice are assigned by backtracking — at each
+    submove try every still-available die that can produce it, recurse, accept the
+    first labelling that consumes a die for every submove. A consistent labelling
+    always exists for a legal play; otherwise :class:`ValueError` is raised.
+    """
+    mover = state.turn
+    multiset = (dice[0],) * 4 if dice[0] == dice[1] else (dice[0], dice[1])
+
+    def assign(cur: EnvState, i: int, avail: tuple[int, ...]) -> tuple[int, ...] | None:
+        if i == len(move.submoves):
+            return ()
+        sm = move.submoves[i]
+        tried: set[int] = set()
+        for j, die in enumerate(avail):
+            if die in tried:  # identical dice give identical branches
+                continue
+            tried.add(die)
+            if sm in _submoves_for_die(cur, mover, die):
+                rest = assign(apply_submove(cur, mover, sm), i + 1, avail[:j] + avail[j + 1 :])
+                if rest is not None:
+                    return (die, *rest)
+        return None
+
+    labels = assign(state, 0, multiset)
+    if labels is None:
+        raise ValueError("move is not a legal play for this (state, dice)")
+    return labels
+
+
 def legal_moves(state: EnvState, dice: Dice) -> list[tuple[Move, EnvState]]:
     """Return ``(Move, afterstate)`` pairs for ``state.turn`` given ``dice``.
 

@@ -84,11 +84,13 @@ def test_move_view_carries_id_submoves_and_afterstate():
     dice = (3, 1)
     legal = Env.legal_moves(state, dice)
     move, afterstate = legal[0]
-    mv = move_view(7, move, afterstate, mover=state.turn)
+    mv = move_view(7, move, afterstate, state, dice)
     assert mv.id == 7
     assert len(mv.submoves) == len(move.submoves)
     assert mv.afterstate.turn == "black"  # afterstate hands the turn to the opponent
     assert isinstance(mv.notation, str) and mv.notation
+    # Every submove is labelled with the die it consumes (here a 3-1, one each).
+    assert sorted(sm.die for sm in mv.submoves) == sorted(dice[: len(mv.submoves)])
 
 
 def test_outcome_view():
