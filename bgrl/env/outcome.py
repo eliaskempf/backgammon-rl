@@ -15,8 +15,7 @@ from .types import EnvState, Outcome, Player, WinKind
 def is_terminal(state: EnvState) -> bool:
     """True once either side has borne off all 15 checkers."""
     return (
-        state.off[Player.WHITE] == CHECKERS_PER_SIDE
-        or state.off[Player.BLACK] == CHECKERS_PER_SIDE
+        state.off[Player.WHITE] == CHECKERS_PER_SIDE or state.off[Player.BLACK] == CHECKERS_PER_SIDE
     )
 
 
