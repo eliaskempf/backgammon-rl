@@ -3,7 +3,8 @@
 Thin wrapper: wires a checkpoints directory into the FastAPI app and runs uvicorn.
 All logic lives in :mod:`bgrl.web`.
 
-    uv run python scripts/play_web.py --checkpoints-dir runs/wp1
+    uv run python scripts/play_web.py            # serves the committed opponent ladder
+    uv run python scripts/play_web.py --checkpoints-dir runs/sweep/lr0.1_lam0.7_h64_s0
 """
 
 from __future__ import annotations
@@ -13,7 +14,13 @@ from pathlib import Path
 
 import uvicorn
 
+import bgrl.web
 from bgrl.web import create_app
+
+# The curated, committed opponent ladder shipped with the package (see
+# scripts/curate_web_opponents.py). Resolved from the package so the default works
+# regardless of the current working directory.
+DEFAULT_CHECKPOINTS_DIR = Path(bgrl.web.__file__).parent / "checkpoints"
 
 
 def main() -> None:
@@ -21,7 +28,7 @@ def main() -> None:
     parser.add_argument(
         "--checkpoints-dir",
         type=Path,
-        default=Path("runs"),
+        default=DEFAULT_CHECKPOINTS_DIR,
         help="directory scanned for *.pt opponent checkpoints",
     )
     parser.add_argument("--host", default="127.0.0.1")

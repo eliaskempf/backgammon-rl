@@ -28,6 +28,7 @@ export interface StateView {
 export interface SubmoveView {
   src: number;
   dst: number;
+  die: number | null; // die value this submove consumes (populated on responses)
 }
 
 export interface MoveView {
@@ -47,6 +48,8 @@ export interface CheckpointInfo {
   trained_with: string | null;
   games_trained: number | null;
   created_at: string | null;
+  win_rate: number | null;
+  eval_opponent: string | null;
 }
 
 export interface NewGameResponse {
@@ -56,6 +59,8 @@ export interface NewGameResponse {
   opponent: string;
   to_act: Color;
   needs_roll: boolean;
+  manual_dice: boolean;
+  can_undo: boolean;
 }
 
 export interface RollResponse {
@@ -67,6 +72,7 @@ export interface RollResponse {
   needs_roll: boolean;
   terminal: boolean;
   outcome: OutcomeView | null;
+  can_undo: boolean;
 }
 
 export interface LegalMovesResponse {
@@ -81,6 +87,8 @@ export interface MoveResponse {
   needs_roll: boolean;
   terminal: boolean;
   outcome: OutcomeView | null;
+  win_prob: number | null; // your win chance after this move (per opponent net)
+  can_undo: boolean;
 }
 
 export interface AgentMoveResponse {
@@ -91,6 +99,19 @@ export interface AgentMoveResponse {
   needs_roll: boolean;
   terminal: boolean;
   outcome: OutcomeView | null;
+  win_prob: number | null; // the agent's win chance; UI shows the complement
+  can_undo: boolean;
+}
+
+export interface UndoResponse {
+  state: StateView;
+  to_act: Color;
+  dice: [number, number] | null;
+  needs_roll: boolean;
+  terminal: boolean;
+  outcome: OutcomeView | null;
+  moves: MoveView[];
+  can_undo: boolean;
 }
 
 export interface CheckpointsResponse {

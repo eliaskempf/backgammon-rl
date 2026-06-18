@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from bgrl.agents import RandomAgent
-from bgrl.env import Env, EnvState, Move, Player, ReplayDiceSource, SubMove
+from bgrl.env import Env, EnvState, ManualDiceSource, Move, Player, ReplayDiceSource, SubMove
 from bgrl.web.session import GameError, GameSession, IllegalMove
 
 WHITE = Player.WHITE
@@ -91,6 +91,101 @@ def test_agent_play_uses_the_env_for_legality():
     assert session.steps
     for earlier, later in zip(session.steps, session.steps[1:], strict=False):
         assert earlier.afterstate == later.state  # afterstate of one ply is the next state
+
+
+def test_manual_session_consumes_supplied_dice():
+    session = _session(ManualDiceSource())
+    assert session.is_manual
+    session.supply_dice((3, 1))
+    assert session.roll() == (3, 1)
+
+
+def test_supply_dice_rejected_for_auto_session():
+    session = _session(ReplayDiceSource([(3, 1)]))
+    assert not session.is_manual
+    with pytest.raises(GameError, match="manual-dice"):
+        session.supply_dice((3, 1))
+
+
+def test_manual_roll_without_supplied_dice_raises():
+    session = _session(ManualDiceSource())
+    with pytest.raises(RuntimeError, match="empty"):
+        session.roll()  # nothing queued yet
+
+
+def test_undo_returns_to_last_human_decision_with_same_dice():
+    session = _session(ReplayDiceSource([(3, 1), (5, 2)]))
+    session.roll()
+    pre_state, pre_dice = session.state, session.dice
+    session.apply_move(session.move_for_id(0))  # human ply
+    session.play_agent()  # agent replies; turn back to WHITE
+    assert session.to_act is WHITE
+    assert session.can_undo
+
+    session.undo()
+    assert session.state == pre_state
+    assert session.dice == pre_dice == (3, 1)
+    assert session.legal == Env.legal_moves(session.state, session.dice)
+    assert session.steps == []  # both plies dropped
+    assert not session.can_undo  # nothing left to revert
+
+
+def test_undo_repeats_across_turns():
+    session = _session(ReplayDiceSource([(3, 1), (5, 2), (6, 4), (2, 3)]))
+    session.roll()
+    h1_state = session.state
+    session.apply_move(session.move_for_id(0))
+    session.play_agent()
+    session.roll()
+    h2_state = session.state
+    session.apply_move(session.move_for_id(0))
+    session.play_agent()
+    assert session.to_act is WHITE
+
+    session.undo()  # back to the second human decision
+    assert session.state == h2_state
+    assert session.dice == (6, 4)
+
+    session.undo()  # back to the first human decision
+    assert session.state == h1_state
+    assert session.dice == (3, 1)
+    assert not session.can_undo
+
+
+def test_undo_with_no_history_raises():
+    session = _session(ReplayDiceSource([(3, 1)]))
+    assert not session.can_undo
+    with pytest.raises(GameError, match="nothing to undo"):
+        session.undo()
+
+
+def test_undo_skips_a_forced_human_pass():
+    # A lone forced human pass is not a redoable decision: can_undo is False.
+    session = _session(ReplayDiceSource([(2, 4)]))
+    session.state = _white_bar_blocked_state()
+    session.roll()
+    session.apply_pass()
+    assert session.steps[0].move == Move(submoves=())
+    assert not session.can_undo
+    with pytest.raises(GameError, match="nothing to undo"):
+        session.undo()
+
+
+def test_undo_in_manual_mode_restores_dice_without_requeueing():
+    session = _session(ManualDiceSource())
+    session.supply_dice((3, 1))
+    session.roll()
+    session.apply_move(session.move_for_id(0))
+    session.supply_dice((5, 2))
+    session.play_agent()
+    assert session.to_act is WHITE
+
+    session.undo()
+    assert session.dice == (3, 1)
+    assert session.legal
+    # The restored roll is live, so a fresh roll is neither needed nor allowed.
+    with pytest.raises(GameError, match="already rolled"):
+        session.roll()
 
 
 def test_terminal_outcome_is_set_when_game_ends():

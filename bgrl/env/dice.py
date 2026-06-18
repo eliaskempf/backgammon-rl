@@ -10,6 +10,7 @@ the thing under test.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
@@ -49,6 +50,32 @@ class RandomDiceSource:
         d = roll_dice(self._rng)
         self.history.append(d)
         return d
+
+
+class ManualDiceSource:
+    """A queue of human-supplied rolls, consumed one per ply.
+
+    Used by the play server's manual-dice mode: the human enters the dice for *both*
+    seats so the agent never draws from an RNG, which rebuts any "the bot rigs its
+    rolls" objection. :meth:`push` enqueues a validated roll; :meth:`roll` pops the
+    oldest pending roll and raises ``RuntimeError`` if none is queued, so a missing
+    roll fails loudly rather than silently fabricating one.
+    """
+
+    def __init__(self) -> None:
+        self._pending: deque[Dice] = deque()
+
+    def push(self, dice: Dice) -> None:
+        """Enqueue a roll. Each die must be in ``1..6`` (doubles are allowed)."""
+        d0, d1 = int(dice[0]), int(dice[1])
+        if not (1 <= d0 <= 6 and 1 <= d1 <= 6):
+            raise ValueError(f"dice must each be in 1..6, got {dice!r}")
+        self._pending.append((d0, d1))
+
+    def roll(self) -> Dice:
+        if not self._pending:
+            raise RuntimeError("ManualDiceSource is empty: supply the dice for this roll first")
+        return self._pending.popleft()
 
 
 class ReplayDiceSource:

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from bgrl.env import RandomDiceSource, ReplayDiceSource, roll_dice
+from bgrl.env import ManualDiceSource, RandomDiceSource, ReplayDiceSource, roll_dice
 
 
 def test_roll_in_range():
@@ -39,3 +39,32 @@ def test_two_sources_same_seed_agree():
     a = RandomDiceSource(np.random.default_rng(5))
     b = RandomDiceSource(np.random.default_rng(5))
     assert [a.roll() for _ in range(20)] == [b.roll() for _ in range(20)]
+
+
+def test_manual_source_pops_in_fifo_order():
+    src = ManualDiceSource()
+    src.push((1, 2))
+    src.push((6, 6))
+    assert src.roll() == (1, 2)
+    assert src.roll() == (6, 6)
+
+
+def test_manual_source_raises_when_empty():
+    src = ManualDiceSource()
+    with pytest.raises(RuntimeError, match="empty"):
+        src.roll()
+
+
+def test_manual_source_rejects_out_of_range_push():
+    src = ManualDiceSource()
+    for bad in [(0, 3), (3, 7), (-1, 1)]:
+        with pytest.raises(ValueError, match="must each be"):
+            src.push(bad)
+
+
+def test_manual_source_coerces_to_int_tuple():
+    src = ManualDiceSource()
+    src.push((np.int64(2), np.int64(5)))
+    d = src.roll()
+    assert d == (2, 5)
+    assert all(type(x) is int for x in d)

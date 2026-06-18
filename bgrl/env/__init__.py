@@ -5,10 +5,10 @@
 
 from .apply import apply_submove
 from .board import initial_board
-from .dice import DiceSource, RandomDiceSource, ReplayDiceSource, roll_dice
+from .dice import DiceSource, ManualDiceSource, RandomDiceSource, ReplayDiceSource, roll_dice
 from .encoding import ENCODING_VERSION, N_FEATURES, encode
 from .env import Env
-from .movegen import legal_moves
+from .movegen import legal_moves, move_dice
 from .outcome import is_terminal, outcome
 from .types import BAR, OFF, Dice, EnvState, Move, Outcome, Player, SubMove, WinKind
 
@@ -21,6 +21,7 @@ __all__ = [
     "DiceSource",
     "Env",
     "EnvState",
+    "ManualDiceSource",
     "Move",
     "Outcome",
     "Player",
@@ -33,6 +34,7 @@ __all__ = [
     "initial_board",
     "is_terminal",
     "legal_moves",
+    "move_dice",
     "outcome",
     "roll_dice",
 ]

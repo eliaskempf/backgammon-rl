@@ -53,6 +53,29 @@ class ValueAgent:
         mover_equity = -equity(opp_outcome, self._cube)  # (B,), current mover's POV (ndarray)
         return legal[self._select(mover_equity)][0]
 
+    def win_probs(self, legal: list[tuple[Move, EnvState]]) -> np.ndarray:
+        """P(the current mover wins) for each legal afterstate, ``(B,)``.
+
+        An afterstate's ``turn`` is the opponent, so the net (evaluated from that
+        perspective) gives the *opponent's* outcome; ``1 - p_win_opponent`` is the
+        current mover's win probability. In v1 only ``p_win`` is trained, so this is
+        exactly the trained quantity — a display-friendly companion to the equity
+        :meth:`act` selects on. Used by the web layer to surface the move's value.
+        """
+        features = np.stack([encode(after, perspective=after.turn) for _, after in legal])
+        opp_outcome = self._net.evaluate(features)  # (B, OUTCOME_DIM), opponent's POV
+        return 1.0 - opp_outcome[:, 0]
+
+    def win_prob(self, afterstate: EnvState) -> float:
+        """P(the player who produced ``afterstate`` wins) — the single-state form.
+
+        ``afterstate.turn`` is the opponent of that player, mirroring
+        :meth:`win_probs`; useful for scoring one already-chosen move.
+        """
+        features = encode(afterstate, perspective=afterstate.turn)[None, :]
+        opp_outcome = self._net.evaluate(features)
+        return float(1.0 - opp_outcome[0, 0])
+
     def _select(self, equities: np.ndarray) -> int:
         """Index of the best equity; ``rng`` (if any) breaks ties uniformly."""
         if self._rng is None:

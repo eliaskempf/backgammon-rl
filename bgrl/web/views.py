@@ -11,7 +11,7 @@ notation (with hit marks and the match header) lives in
 
 from __future__ import annotations
 
-from bgrl.env import BAR, OFF, EnvState, Move, Outcome, Player, SubMove
+from bgrl.env import BAR, OFF, Dice, EnvState, Move, Outcome, Player, SubMove, move_dice
 from bgrl.web.schemas import (
     CheckerCounts,
     Color,
@@ -73,15 +73,23 @@ def state_view(state: EnvState) -> StateView:
     )
 
 
-def submove_view(submove: SubMove) -> SubmoveView:
-    return SubmoveView(src=submove.src, dst=submove.dst)
+def submove_view(submove: SubMove, die: int | None = None) -> SubmoveView:
+    return SubmoveView(src=submove.src, dst=submove.dst, die=die)
 
 
-def move_view(move_id: int, move: Move, afterstate: EnvState, mover: Player) -> MoveView:
+def move_view(
+    move_id: int, move: Move, afterstate: EnvState, state: EnvState, dice: Dice
+) -> MoveView:
+    """Project ``move`` (played from ``state`` with ``dice``) into a ``MoveView``.
+
+    ``state`` is the pre-move position (``state.turn`` is the mover); ``dice`` lets
+    each submove carry the die it consumes (see :func:`bgrl.env.move_dice`).
+    """
+    dice_used = move_dice(state, dice, move)
     return MoveView(
         id=move_id,
-        submoves=[submove_view(sm) for sm in move.submoves],
-        notation=move_notation(move, mover),
+        submoves=[submove_view(sm, d) for sm, d in zip(move.submoves, dice_used, strict=True)],
+        notation=move_notation(move, state.turn),
         afterstate=state_view(afterstate),
     )
 

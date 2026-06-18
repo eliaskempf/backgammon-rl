@@ -20,7 +20,17 @@ from dataclasses import replace
 import numpy as np
 
 from bgrl.agents.base import Agent
-from bgrl.env import Dice, Env, EnvState, Move, Outcome, Player, RandomDiceSource, SubMove
+from bgrl.env import (
+    Dice,
+    DiceSource,
+    Env,
+    EnvState,
+    ManualDiceSource,
+    Move,
+    Outcome,
+    Player,
+    SubMove,
+)
 from bgrl.game import Step
 
 PASS = Move(submoves=())  # the empty move applied on a forced pass (matches game.py)
@@ -44,7 +54,7 @@ class GameSession:
         opponent: Agent,
         opponent_name: str,
         human_seat: Player,
-        dice_source: RandomDiceSource,
+        dice_source: DiceSource,
     ) -> None:
         self.game_id = game_id
         self.opponent = opponent
@@ -78,7 +88,23 @@ class GameSession:
     def human_to_move(self) -> bool:
         return not self.terminal and self.state.turn is self.human_seat
 
+    @property
+    def is_manual(self) -> bool:
+        """True when the human supplies every roll (both seats) via :meth:`supply_dice`."""
+        return isinstance(self.dice_source, ManualDiceSource)
+
+    @property
+    def can_undo(self) -> bool:
+        """True iff there is a prior human decision (a non-pass human step) to revert to."""
+        return any(s.state.turn is self.human_seat and s.move.submoves for s in self.steps)
+
     # --- mutations -------------------------------------------------------------
+
+    def supply_dice(self, dice: Dice) -> None:
+        """Queue a human-entered roll for the next :meth:`roll`; manual games only."""
+        if not isinstance(self.dice_source, ManualDiceSource):
+            raise GameError("game is not in manual-dice mode")
+        self.dice_source.push(dice)
 
     def roll(self) -> Dice:
         """Roll for the current mover and cache the resulting legal moves."""
@@ -136,6 +162,34 @@ class GameSession:
         self.apply_move(move)
         return move
 
+    def undo(self) -> None:
+        """Revert to the human's most recent real decision so they can replay it.
+
+        Scans the recorded steps backward for the latest one where it was the
+        human's turn *and* they had a legal move (a forced human pass has nothing to
+        redo, so it is skipped). Restores that step's pre-move state and the very
+        roll it was played with — the human lands back at "you rolled X, choose your
+        move" with the same dice — drops every later step (and any uncommitted
+        current roll, which was never recorded), and clears any outcome.
+
+        Raises :class:`GameError` (HTTP 409) when there is no such decision.
+        """
+        target: int | None = None
+        for i in range(len(self.steps) - 1, -1, -1):
+            step = self.steps[i]
+            if step.state.turn is self.human_seat and step.move.submoves:
+                target = i
+                break
+        if target is None:
+            raise GameError("nothing to undo")
+        step = self.steps[target]
+        self.state = step.state
+        self.dice = step.dice
+        self.legal = Env.legal_moves(self.state, self.dice)
+        self.outcome = Env.outcome(self.state) if Env.is_terminal(self.state) else None
+        self.steps = self.steps[:target]
+        self.last_used = time.monotonic()
+
     def _advance(self, move: Move, afterstate: EnvState) -> None:
         assert self.dice is not None  # callers guarantee a live roll
         self.steps.append(Step(self.state, self.dice, move, afterstate))
@@ -166,7 +220,7 @@ class SessionStore:
         opponent: Agent,
         opponent_name: str,
         human_seat: Player,
-        dice_source: RandomDiceSource,
+        dice_source: DiceSource,
     ) -> GameSession:
         game_id = secrets.token_urlsafe(12)
         session = GameSession(
