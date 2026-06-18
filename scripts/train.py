@@ -152,7 +152,14 @@ def main() -> None:
         try:
             import wandb
 
-            init_kw = {"project": args.wandb_project, "config": config, "dir": str(args.out_dir)}
+            # Name the run after its output-dir label (e.g. lr0.1_lam0.7_h128_s0) so the
+            # W&B dashboard is readable instead of using a random adjective-noun name.
+            init_kw = {
+                "project": args.wandb_project,
+                "name": args.out_dir.name,
+                "config": config,
+                "dir": str(args.out_dir),
+            }
             if resuming and wandb_run_id:
                 init_kw |= {"id": wandb_run_id, "resume": "allow"}
             wandb_run = wandb.init(**init_kw)
@@ -201,6 +208,9 @@ def main() -> None:
         metrics.writerow([n, res.win_rate_a, res.avg_plies, res.truncated])
         metrics_file.flush()
         if wandb_run is not None:
+            # commit=True is required: with an explicit `step`, wandb defaults to
+            # commit=False, which buffers each eval's metrics until the *next* eval (so
+            # the live dashboard lags one eval and shows only system metrics early on).
             wandb_run.log(
                 {
                     "win_rate": res.win_rate_a,
@@ -208,6 +218,7 @@ def main() -> None:
                     "truncated": res.truncated,
                 },
                 step=n,
+                commit=True,
             )
         if res.win_rate_a > best_win_rate:
             best_win_rate = res.win_rate_a
