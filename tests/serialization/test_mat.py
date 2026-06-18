@@ -104,6 +104,18 @@ def test_match_header_and_player_names():
     assert mat.endswith("\n")
 
 
+def test_player_name_colon_is_sanitised_for_gnubg():
+    # A colon in a name (e.g. an "llm:model" agent label) gives gnubg's importer a second
+    # ':' on the names line and crashes its analysis; the writer must neutralise it.
+    # Slashes are fine, so a checkpoint-path / model-slug name is preserved.
+    steps, outcome = _random_game(0)
+    mat = game_to_mat(steps, outcome, white_name="llm:dry", black_name="anthropic/claude")
+    names_line = next(ln for ln in mat.splitlines() if "claude" in ln)
+    assert "llm:dry" not in names_line
+    assert "llm-dry : 0" in names_line
+    assert "anthropic/claude : 0" in names_line
+
+
 def test_win_line_reflects_outcome_magnitude():
     steps, outcome = _random_game(0)  # BLACK wins a single
     mat = game_to_mat(steps, outcome)

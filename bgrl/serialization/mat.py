@@ -56,6 +56,17 @@ def _two_columns(left: str, right: str) -> str:
     return f"{left}{' ' * gap}{right}".rstrip()
 
 
+def _safe_name(name: str) -> str:
+    """Sanitise a player name for the ``.mat`` names line (``name : score``).
+
+    A colon inside the name gives gnubg's importer a second ``:`` token and desyncs
+    its parser — concretely it crashes ``analyse`` with a buffer overflow (e.g. an
+    agent label like ``llm:anthropic/claude-haiku-4-5``). Slashes/dashes are fine, so
+    we only neutralise the colon and trim whitespace; an empty result falls back.
+    """
+    return name.replace(":", "-").strip() or "player"
+
+
 def point_number(point: int, mover: Player) -> int:
     """Absolute board index ``0..23`` -> the mover's own 1..24 point number.
 
@@ -130,7 +141,7 @@ def _game_block(
     """
     # gnubg's names line is ``<name> : <score>`` per column (score is 0 for a money
     # session); a bare name desyncs its importer and the whole match fails to load.
-    names = " " + _two_columns(f"{white_name} : 0", f"{black_name} : 0")
+    names = " " + _two_columns(f"{_safe_name(white_name)} : 0", f"{_safe_name(black_name)} : 0")
     lines = [f" Game {number}", names]
     # WHITE is player 1; turns strictly alternate, so even steps are WHITE, odd BLACK.
     rounds = (len(steps) + 1) // 2
