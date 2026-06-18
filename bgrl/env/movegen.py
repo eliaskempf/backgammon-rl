@@ -115,18 +115,20 @@ def move_dice(state: EnvState, dice: Dice, move: Move) -> tuple[int, ...]:
     return labels
 
 
-def legal_moves(state: EnvState, dice: Dice) -> list[tuple[Move, EnvState]]:
-    """Return ``(Move, afterstate)`` pairs for ``state.turn`` given ``dice``.
+def _enumerate(state: EnvState, dice: Dice) -> dict[_AfterKey, list[tuple[SubMove, ...]]]:
+    """All maximal *executable* submove orderings, grouped by afterstate.
 
-    Afterstates carry ``turn = opponent`` (it is their move next). The list is
-    de-duplicated by afterstate; an empty list means no legal move (the turn
-    passes).
+    The depth-first walk only ever extends along legal submoves, so every leaf is an
+    executable play; we keep the leaves of maximal length and apply the forced-higher-die
+    rule, leaving exactly the afterstates :func:`legal_moves` reports — but with *every*
+    ordering that reaches each, not just the canonical one. Each value's orderings are
+    sorted by :func:`_seq_key`, so the first is the canonical (lexicographically smallest)
+    one and the output is deterministic.
     """
     mover = state.turn
-    opp = mover.opponent()
     dice_seq = (dice[0],) * 4 if dice[0] == dice[1] else (dice[0], dice[1])
 
-    best: dict[_AfterKey, tuple[int, tuple[SubMove, ...]]] = {}
+    paths: dict[_AfterKey, list[tuple[SubMove, ...]]] = {}
     max_used = 0
 
     def visit(cur: EnvState, remaining: tuple[int, ...], path: tuple[SubMove, ...]) -> None:
@@ -143,16 +145,19 @@ def legal_moves(state: EnvState, dice: Dice) -> list[tuple[Move, EnvState]]:
                 visit(nxt, remaining[:i] + remaining[i + 1 :], (*path, sm))
         if not extended and path:  # leaf: nothing more can be played on this branch
             key = (cur.board, cur.bar, cur.off)
-            n = len(path)
-            max_used = max(max_used, n)
-            prev = best.get(key)
-            if prev is None or n > prev[0] or (n == prev[0] and _seq_key(path) < _seq_key(prev[1])):
-                best[key] = (n, path)
+            max_used = max(max_used, len(path))
+            paths.setdefault(key, []).append(path)
 
     visit(state, dice_seq, ())
 
-    # Forced-higher-die: if no two-dice play exists for a non-double, the higher
-    # die must be played whenever it is playable at all.
+    # Keep only maximal-length plays (drop short dead-ends), then forced-higher-die: if no
+    # two-dice play exists for a non-double, the higher die must be played when playable.
+    best: dict[_AfterKey, list[tuple[SubMove, ...]]] = {}
+    for key, plist in paths.items():
+        maximal = [p for p in plist if len(p) == max_used]
+        if maximal:
+            best[key] = sorted(maximal, key=_seq_key)
+
     if max_used == 1 and dice[0] != dice[1]:
         higher_submoves = _submoves_for_die(state, mover, max(dice))
         if higher_submoves:
@@ -162,10 +167,19 @@ def legal_moves(state: EnvState, dice: Dice) -> list[tuple[Move, EnvState]]:
                 allowed.add((nxt.board, nxt.bar, nxt.off))
             best = {k: v for k, v in best.items() if k in allowed}
 
+    return best
+
+
+def legal_moves(state: EnvState, dice: Dice) -> list[tuple[Move, EnvState]]:
+    """Return ``(Move, afterstate)`` pairs for ``state.turn`` given ``dice``.
+
+    Afterstates carry ``turn = opponent`` (it is their move next). The list is
+    de-duplicated by afterstate, each carrying the canonical (lexicographically smallest
+    executable) submove ordering; an empty list means no legal move (the turn passes).
+    """
+    opp = state.turn.opponent()
     out: list[tuple[Move, EnvState]] = []
-    for (board, bar, off), (n, path) in best.items():
-        if n != max_used:
-            continue
+    for (board, bar, off), orderings in _enumerate(state, dice).items():
         after = EnvState(
             board=board,
             bar=bar,
@@ -174,5 +188,16 @@ def legal_moves(state: EnvState, dice: Dice) -> list[tuple[Move, EnvState]]:
             cube_value=state.cube_value,
             cube_owner=state.cube_owner,
         )
-        out.append((Move(path), after))
+        out.append((Move(orderings[0]), after))  # orderings[0] = canonical, see _enumerate
     return out
+
+
+def legal_orderings(state: EnvState, dice: Dice) -> dict[_AfterKey, list[tuple[SubMove, ...]]]:
+    """Every legal submove ordering for each afterstate of ``(state, dice)``.
+
+    Keyed by the afterstate's ``(board, bar, off)`` (matching :func:`legal_moves`'
+    afterstates), each value lists all maximal executable orderings reaching it, sorted
+    canonically. Used by the web UI to let a human enter a play's submoves in any legal
+    order; agents do not need it (they choose afterstates, not orderings).
+    """
+    return _enumerate(state, dice)

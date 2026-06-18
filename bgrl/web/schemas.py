@@ -57,10 +57,16 @@ class SubmoveView(BaseModel):
 
 
 class MoveView(BaseModel):
-    """A full legal play. ``id`` indexes the session's cached legal list for this roll."""
+    """A full legal play. ``id`` indexes the session's cached legal list for this roll.
+
+    ``submoves`` is the canonical ordering (used for the notation). ``orderings`` lists
+    *every* legal submove ordering reaching this afterstate, so the UI can let the human
+    enter the play's submoves in any legal order (each carries its per-submove ``die``).
+    """
 
     id: int
     submoves: list[SubmoveView]
+    orderings: list[list[SubmoveView]]
     notation: str
     afterstate: StateView
 

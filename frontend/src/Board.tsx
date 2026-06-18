@@ -343,7 +343,7 @@ export default function Board({
         <text x={OFF_X} y={TOP_Y + 24} textAnchor="middle" fontSize={20} fill="#d8b377">
           off
         </text>
-        <text x={OFF_X} y={TOP_Y + 56} textAnchor="middle" fontSize={26} fill="#2b2b2b">
+        <text x={OFF_X} y={TOP_Y + 56} textAnchor="middle" fontSize={26} fill="#f4f1ea">
           ⚫ {shown.off.black}
         </text>
         <text x={OFF_X} y={BOT_Y - 30} textAnchor="middle" fontSize={26} fill="#f4f1ea">

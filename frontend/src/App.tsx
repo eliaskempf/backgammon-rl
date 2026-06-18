@@ -15,10 +15,10 @@ import {
 } from "./types";
 
 // Animation timing (ms). Tuned to read clearly without dragging; tweak freely.
-const AGENT_REVEAL_MS = 700; // pause after showing the opponent's dice, before it moves
-const AGENT_GLIDE_MS = 450; // checker slide duration for the opponent
+const AGENT_REVEAL_MS = 1000; // pause after showing the opponent's dice, before it moves
+const AGENT_GLIDE_MS = 600; // checker slide duration for the opponent
 const AGENT_SETTLE_MS = 250; // glow/settle after each opponent submove
-const HUMAN_GLIDE_MS = 240; // snappier slide for the human's own submoves
+const HUMAN_GLIDE_MS = 300; // snappier slide for the human's own submoves
 const HUMAN_SETTLE_MS = 100;
 const REPLAY_REVEAL_MS = 350;
 
@@ -30,6 +30,13 @@ function isPrefix(chosen: SubmoveView[], full: SubmoveView[]): boolean {
 
 function sameSubmoves(a: SubmoveView[], b: SubmoveView[]): boolean {
   return a.length === b.length && isPrefix(a, b);
+}
+
+// The orderings of a play the human's chosen prefix is still consistent with. A play may
+// be reachable by several legal submove orders (e.g. 6/off then 4/1, or 4/1 then 6/off);
+// the human may have clicked any of them so far, so we never assume one canonical order.
+function consistentOrderings(c: MoveView, chosen: SubmoveView[]): SubmoveView[][] {
+  return c.orderings.filter((o) => isPrefix(chosen, o));
 }
 
 // Display order: higher die on the left by default; the flip toggle reverses it.
@@ -378,19 +385,22 @@ export default function App() {
     [gameId, view, humanColor, animate, applyResult],
   );
 
-  // Derived: matching candidates for the chosen prefix, and the clickable sources.
+  // Derived: plays still reachable from the chosen prefix (under *any* legal ordering),
+  // and the squares a next submove can start from.
   const matching = useMemo(
-    () => candidates.filter((c) => isPrefix(chosen, c.submoves)),
+    () => candidates.filter((c) => consistentOrderings(c, chosen).length > 0),
     [candidates, chosen],
   );
   const sources = useMemo(() => {
     const s = new Set<number>();
     for (const c of matching) {
-      const next = c.submoves[chosen.length];
-      if (next) s.add(next.src);
+      for (const o of consistentOrderings(c, chosen)) {
+        const next = o[chosen.length];
+        if (next) s.add(next.src);
+      }
     }
     return s;
-  }, [matching, chosen.length]);
+  }, [matching, chosen]);
 
   const humanTurn = !!gameId && !terminal && toAct === humanColor && !busy && !animation;
   const displayedDice = useMemo(() => orderDice(dice, diceSwapped), [dice, diceSwapped]);
@@ -405,8 +415,11 @@ export default function App() {
   const onPick = useCallback(
     async (square: number) => {
       if (!humanTurn || !displayedDice || animation || !preview) return;
+      // Next submoves from `square` across every chosen-consistent ordering of every
+      // still-reachable play — so a checker is selectable in any legal order, not just the
+      // backend's canonical one.
       const nexts = matching
-        .map((c) => c.submoves[chosen.length])
+        .flatMap((c) => consistentOrderings(c, chosen).map((o) => o[chosen.length]))
         .filter((sm): sm is SubmoveView => !!sm && sm.src === square);
       if (!nexts.length) return;
       const [leftDie, rightDie] = displayedDice;
@@ -414,7 +427,9 @@ export default function App() {
         nexts.find((sm) => sm.die === leftDie) ?? nexts.find((sm) => sm.die === rightDie) ?? nexts[0];
       const oldPreview = preview;
       const newChosen = [...chosen, pick];
-      const complete = candidates.find((c) => sameSubmoves(c.submoves, newChosen));
+      const complete = candidates.find((c) =>
+        c.orderings.some((o) => sameSubmoves(o, newChosen)),
+      );
       setChosen(newChosen);
       await animate({
         fromBoard: oldPreview,
@@ -429,13 +444,16 @@ export default function App() {
     [humanTurn, displayedDice, animation, preview, matching, chosen, candidates, humanColor, animate, submitMove],
   );
 
-  // Fallback: play a full legal move from the notation list, animating what's left.
+  // Fallback: play a full legal move from the notation list, animating what's left. Pick
+  // an ordering consistent with what's already been clicked so the remaining glide starts
+  // from the current preview (the user may have built the prefix in a non-canonical order).
   const playFullMove = useCallback(
     async (m: MoveView) => {
       if (animation || !preview) return;
-      const remaining = m.submoves.slice(chosen.length);
+      const ordering = consistentOrderings(m, chosen)[0] ?? m.submoves;
+      const remaining = ordering.slice(chosen.length);
       const oldPreview = preview;
-      setChosen(m.submoves);
+      setChosen(ordering);
       if (remaining.length) {
         await animate({
           fromBoard: oldPreview,
@@ -448,7 +466,7 @@ export default function App() {
       }
       await submitMove(m.id);
     },
-    [animation, preview, chosen.length, humanColor, animate, submitMove],
+    [animation, preview, chosen, humanColor, animate, submitMove],
   );
 
   const onUndo = useCallback(async () => {

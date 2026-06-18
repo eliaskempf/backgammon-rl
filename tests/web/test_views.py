@@ -3,6 +3,7 @@
 from bgrl.env import BAR, OFF, Env, EnvState, Move, Outcome, Player, SubMove, WinKind
 from bgrl.web.views import (
     color_of,
+    legal_move_views,
     move_notation,
     move_view,
     player_of,
@@ -91,6 +92,31 @@ def test_move_view_carries_id_submoves_and_afterstate():
     assert isinstance(mv.notation, str) and mv.notation
     # Every submove is labelled with the die it consumes (here a 3-1, one each).
     assert sorted(sm.die for sm in mv.submoves) == sorted(dice[: len(mv.submoves)])
+    # With no orderings passed, only the canonical ordering is exposed.
+    assert [[(s.src, s.dst) for s in o] for o in mv.orderings] == [
+        [(s.src, s.dst) for s in mv.submoves]
+    ]
+
+
+def test_legal_move_views_expose_every_ordering():
+    # Bear-off position (cf. bug-examples/3.png): the play that bears off the 6-point and
+    # plays 4/1 is reachable in both orders, so its MoveView must carry both orderings, one
+    # of which starts by bearing off (SubMove(5, OFF)).
+    board = [0] * 24
+    board[3], board[4], board[5] = 1, 12, 1
+    board[23] = -15
+    state = EnvState(board=tuple(board), bar=(0, 0), off=(1, 0), turn=WHITE)
+    dice = (6, 3)
+    views = legal_move_views(state, dice, Env.legal_moves(state, dice))
+    # ``id`` indexes the legal list so submission by id still works.
+    assert [v.id for v in views] == list(range(len(views)))
+    bear_first = [v for v in views if any(o[0].src == 5 and o[0].dst == OFF for o in v.orderings)]
+    assert bear_first, "no ordering lets the 6-point checker bear off first"
+    multi = [v for v in views if len(v.orderings) > 1]
+    assert multi and all(
+        len({tuple((s.src, s.dst) for s in o) for o in v.orderings}) == len(v.orderings)
+        for v in multi
+    )
 
 
 def test_outcome_view():

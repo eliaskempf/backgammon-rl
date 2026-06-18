@@ -57,6 +57,27 @@ def test_human_can_play_second_seat(client):
     assert terminal and outcome is not None
 
 
+def test_legal_moves_carry_executable_orderings(client):
+    # Each legal move must expose every legal submove ordering, with per-submove dice, so
+    # the UI can let the human enter submoves in any order (regression for the web bug).
+    ng = client.post(
+        "/new_game", json={"human_color": "white", "opponent": "random", "seed": 3}
+    ).json()
+    gid = ng["game_id"]
+    client.post("/roll", json={"game_id": gid})
+    moves = client.get("/legal_moves", params={"game_id": gid}).json()["moves"]
+    assert moves
+    for m in moves:
+        assert m["orderings"], "every move must list at least its canonical ordering"
+        n = len(m["submoves"])
+        canonical = [(s["src"], s["dst"]) for s in m["submoves"]]
+        seen = {tuple((s["src"], s["dst"]) for s in o) for o in m["orderings"]}
+        assert tuple(canonical) in seen  # the canonical ordering is one of them
+        for o in m["orderings"]:
+            assert len(o) == n  # all orderings of a play use the same dice
+            assert all(isinstance(s["die"], int) for s in o)  # each submove carries its die
+
+
 def test_illegal_move_id_returns_409(client):
     ng = client.post("/new_game", json={"human_color": "white", "opponent": "random"}).json()
     gid = ng["game_id"]

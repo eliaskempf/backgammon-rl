@@ -33,7 +33,8 @@ export interface SubmoveView {
 
 export interface MoveView {
   id: number;
-  submoves: SubmoveView[];
+  submoves: SubmoveView[]; // canonical ordering (used for the notation)
+  orderings: SubmoveView[][]; // every legal submove ordering reaching this afterstate
   notation: string;
   afterstate: StateView;
 }

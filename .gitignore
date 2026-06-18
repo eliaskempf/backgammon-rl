@@ -227,6 +227,8 @@ bench_results/
 .venv-*/
 runs/
 wandb/
+# ad-hoc bug-report screenshots, kept on disk but not tracked
+bug-examples/
 # slurm scripts are generated on the cluster, not committed here.
 slurm/
 # Claude Code git worktrees (transient); keep the rest of .claude/ trackable.

@@ -11,7 +11,20 @@ notation (with hit marks and the match header) lives in
 
 from __future__ import annotations
 
-from bgrl.env import BAR, OFF, Dice, EnvState, Move, Outcome, Player, SubMove, move_dice
+from collections.abc import Sequence
+
+from bgrl.env import (
+    BAR,
+    OFF,
+    Dice,
+    EnvState,
+    Move,
+    Outcome,
+    Player,
+    SubMove,
+    legal_orderings,
+    move_dice,
+)
 from bgrl.web.schemas import (
     CheckerCounts,
     Color,
@@ -77,21 +90,55 @@ def submove_view(submove: SubMove, die: int | None = None) -> SubmoveView:
     return SubmoveView(src=submove.src, dst=submove.dst, die=die)
 
 
+def _ordering_view(state: EnvState, dice: Dice, submoves: tuple[SubMove, ...]) -> list[SubmoveView]:
+    """One submove ordering with each submove labelled by the die it consumes."""
+    dice_used = move_dice(state, dice, Move(submoves))
+    return [submove_view(sm, d) for sm, d in zip(submoves, dice_used, strict=True)]
+
+
 def move_view(
-    move_id: int, move: Move, afterstate: EnvState, state: EnvState, dice: Dice
+    move_id: int,
+    move: Move,
+    afterstate: EnvState,
+    state: EnvState,
+    dice: Dice,
+    orderings: Sequence[tuple[SubMove, ...]] | None = None,
 ) -> MoveView:
     """Project ``move`` (played from ``state`` with ``dice``) into a ``MoveView``.
 
     ``state`` is the pre-move position (``state.turn`` is the mover); ``dice`` lets
-    each submove carry the die it consumes (see :func:`bgrl.env.move_dice`).
+    each submove carry the die it consumes (see :func:`bgrl.env.move_dice`). ``orderings``
+    is every legal submove ordering for this afterstate (from :func:`bgrl.env.legal_orderings`);
+    when omitted only the canonical ordering is exposed (fine for display-only moves the
+    human will not interactively rebuild, e.g. the opponent's played move).
     """
-    dice_used = move_dice(state, dice, move)
+    canonical = _ordering_view(state, dice, move.submoves)
+    ordering_views = (
+        [canonical] if orderings is None else [_ordering_view(state, dice, o) for o in orderings]
+    )
     return MoveView(
         id=move_id,
-        submoves=[submove_view(sm, d) for sm, d in zip(move.submoves, dice_used, strict=True)],
+        submoves=canonical,
+        orderings=ordering_views,
         notation=move_notation(move, state.turn),
         afterstate=state_view(afterstate),
     )
+
+
+def legal_move_views(
+    state: EnvState, dice: Dice, legal: Sequence[tuple[Move, EnvState]]
+) -> list[MoveView]:
+    """Project the session's cached legal moves into ``MoveView``s carrying every ordering.
+
+    ``legal`` is ``[(canonical_move, afterstate), ...]`` (one per afterstate, as
+    :func:`bgrl.env.legal_moves` returns); orderings are looked up per afterstate so the
+    ``id`` still indexes ``legal`` for submission.
+    """
+    by_after = legal_orderings(state, dice)
+    return [
+        move_view(i, m, a, state, dice, by_after.get((a.board, a.bar, a.off), [m.submoves]))
+        for i, (m, a) in enumerate(legal)
+    ]
 
 
 def outcome_view(outcome: Outcome | None) -> OutcomeView | None:

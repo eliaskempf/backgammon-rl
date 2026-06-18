@@ -34,7 +34,14 @@ from bgrl.web.schemas import (
     UndoResponse,
 )
 from bgrl.web.session import GameError, GameSession, SessionStore, make_seed_streams
-from bgrl.web.views import color_of, move_view, outcome_view, player_of, state_view
+from bgrl.web.views import (
+    color_of,
+    legal_move_views,
+    move_view,
+    outcome_view,
+    player_of,
+    state_view,
+)
 
 DEFAULT_STATIC_DIR = Path(__file__).parent / "static"
 
@@ -145,11 +152,7 @@ def create_app(
         session = get_session(game_id)
         with session.lock:
             state, dice = session.state, session.dice
-            moves = (
-                [move_view(i, m, a, state, dice) for i, (m, a) in enumerate(session.legal)]
-                if dice is not None
-                else []
-            )
+            moves = legal_move_views(state, dice, session.legal) if dice is not None else []
             return LegalMovesResponse(dice=dice, moves=moves)
 
     @app.post("/move", response_model=MoveResponse)
@@ -226,11 +229,7 @@ def create_app(
             except GameError as exc:
                 raise HTTPException(409, str(exc)) from None
             state, dice = session.state, session.dice
-            moves = (
-                [move_view(i, m, a, state, dice) for i, (m, a) in enumerate(session.legal)]
-                if dice is not None
-                else []
-            )
+            moves = legal_move_views(state, dice, session.legal) if dice is not None else []
             return UndoResponse(
                 state=state_view(state),
                 to_act=color_of(session.to_act),
