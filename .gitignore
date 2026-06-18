@@ -217,6 +217,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Claude Code — commit settings.json + hooks/ (shared team config); ignore the
+# git worktrees (git-internal) and personal local overrides.
+.claude/worktrees/
+.claude/settings.local.json
+
 # Project-specific
 bench_results/
 .venv-*/
