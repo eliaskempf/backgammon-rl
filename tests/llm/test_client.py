@@ -145,6 +145,33 @@ def test_structured_output_rejection_detection():
     assert not _structured_output_rejected("rate limit exceeded")
 
 
+def _mock_client(status, payload):
+    import httpx
+
+    from bgrl.llm.client import OpenRouterClient
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(status, json=payload))
+    http = httpx.Client(base_url="http://test", transport=transport)
+    return OpenRouterClient(api_key="test-key", client=http)
+
+
+def test_400_on_structured_request_downgrades_even_with_generic_message():
+    # The provider that crashed the live sweep returned a bare "Provider returned error".
+    client = _mock_client(400, {"error": {"message": "Provider returned error"}})
+    schema = {"type": "json_schema", "json_schema": {"name": "move_choice"}}
+    with pytest.raises(StructuredOutputUnsupported):
+        client.complete(MSGS, ChatParams(model="m", response_format=schema))
+
+
+def test_400_without_structured_stays_a_generic_error():
+    from bgrl.llm.client import OpenRouterError
+
+    client = _mock_client(400, {"error": {"message": "some unrelated bad request"}})
+    with pytest.raises(OpenRouterError) as exc:
+        client.complete(MSGS, ChatParams(model="m"))  # no response_format
+    assert not isinstance(exc.value, StructuredOutputUnsupported)
+
+
 def _priced(text, cost):
     return ChatResponse(text, Usage(1, 1, 2, cost), "m")
 

@@ -244,7 +244,14 @@ class OpenRouterClient:
                 raise OpenRouterError(status, text)
 
             text = _error_text(resp)
-            if status == 400 and _structured_output_rejected(text):
+            # A 400 on a request that carried ``response_format`` means the model/provider
+            # can't honour structured output; surface it as StructuredOutputUnsupported so
+            # the agent downgrades to text instead of crashing. Providers vary — some return
+            # a descriptive message, others a bare "Provider returned error" — so we key on
+            # the request carrying a schema, not only on the error wording. A genuine non-
+            # structured 400 resurfaces on the text retry (which sends no response_format).
+            structured_attempt = params.response_format is not None
+            if status == 400 and (structured_attempt or _structured_output_rejected(text)):
                 raise StructuredOutputUnsupported(status, text)
             raise OpenRouterError(status, text)
 
