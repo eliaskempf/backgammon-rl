@@ -102,9 +102,38 @@ This is the multi-head analogue of WP1's sign-flip; it is **the** thing to test.
 
 Add a self-play diagnostic: predicted vs realized gammon/backgammon rate (reliability
 curve) per head, logged during training. This is how you *know* the heads converged rather
-than collapsed to ~0, and it's the signal for whether rollout fine-tuning (below) is worth
-it. Expect `p_win` fastest, gammon a few× slower, **backgammon slowest and noisiest** —
-that ordering is normal, not a bug.
+than collapsed to ~0, and it's the signal for whether the optional rollout fine-tuning in
+A5 is worth it. Expect `p_win` fastest, gammon a few× slower, **backgammon slowest and
+noisiest** — that ordering is normal, not a bug.
+
+### A5. Optional, gated: supervised rollout fine-tuning of the gammon/bg heads
+
+**Trigger — do not build by default.** Only if the A4 diagnostic shows the backgammon (or
+gammon) head **collapsed to ≈0 / its reliability curve is flat** — i.e. online TD never
+accumulated enough rare-event signal. Otherwise skip entirely: the TD-only heads clear the
+strength bar (TD-Gammon dropped backgammon outright; gnubg/XG treat it as a minor
+correction).
+
+**Method — decouple accuracy from waiting on rare online-TD terminals.** Generate
+low-variance supervised targets and fine-tune on top of the Part-A net (a fine-tuning pass,
+**not** a replacement for the TD training):
+
+- Sample positions, **biased toward late-game / bearoff / deep-contact** where gammon and
+  backgammon are actually decided — that's where the discriminative signal lives.
+- From each, run **truncated multi-outcome rollouts** with the current net as the leaf
+  policy; average the realized 5-vector to get a low-variance target for *all five heads at
+  once*.
+- Optional variance reduction: use the value net's own evaluation as a **control-variate
+  baseline** in the rollout (gnubg-style) — this sharpens the rare heads fastest.
+- Supervised-fit the heads to these targets (per-head sigmoid / cross-entropy).
+
+**Acceptance (only if built).** The bg/gammon reliability curve from A4 measurably improves
+vs the TD-only baseline, with **no regression** in `p_win` calibration or in playing
+strength (win rate vs the WP2 / pubeval reference under common random numbers).
+
+**Cost note.** Rollouts are the expensive part (many leaf evals per sampled position) — keep
+the sampled set small and keep the whole pass behind the A4 trigger so it never runs by
+default.
 
 ---
 
@@ -183,7 +212,7 @@ more total training, no new cube/match hyperparameters.
   **rollout fine-tuning** for gammon/bg — truncated multi-outcome rollouts give a
   low-variance target for all five heads at once, decoupling accuracy from waiting on rare
   online-TD terminals. Gate (b) behind the A4 diagnostic; don't build it unless calibration
-  demands it.
+  demands it — scoped as the optional **A5** above.
 - **Bigger net?** Modest. The heads share the trunk, so marginal capacity is small, but the
   trunk must now encode gammon-relevant structure (loser containment / how trapped the
   loser is), not just the race. Recommend bumping `hidden` 64 → ~128; richer input features
