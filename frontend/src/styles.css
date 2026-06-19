@@ -127,6 +127,26 @@ button:disabled {
   }
 }
 
+/* The centre-of-board "Roll" pill: a gentle breathing pulse to invite the click.
+   transform-box/transform-origin make the scale pivot around the pill's own centre
+   (SVG defaults to the viewport origin otherwise). Dropped when the pill is disabled. */
+.roll-pill {
+  cursor: pointer;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: rollbreathe 1.6s ease-in-out infinite;
+}
+
+@keyframes rollbreathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
 .actionbar {
   display: flex;
   flex-wrap: wrap;

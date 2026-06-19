@@ -167,6 +167,45 @@ function Die({
   );
 }
 
+// The "Roll" control, drawn in the centre bar exactly where the dice land. Kept in
+// SVG coordinates (not an HTML overlay) because the bar centre is not the viewBox
+// centre — the off-tray shifts the play area left — so it stays aligned and scales
+// with the board. Shown only on the human's roll turn; mutually exclusive with dice.
+function RollButton({ disabled, onRoll, color }: { disabled: boolean; onRoll: () => void; color: Color }) {
+  const w = 140;
+  const h = 60;
+  const x = BAR_X - w / 2;
+  const y = VB_H / 2 - h / 2;
+  const dieSize = 26;
+  const dieX = x + 16;
+  const labelX = (dieX + dieSize + (x + w)) / 2; // centred between the die and the pill's right edge
+  return (
+    <g
+      className={disabled ? undefined : "roll-pill"}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-label="Roll the dice"
+      aria-disabled={disabled}
+      opacity={disabled ? 0.5 : 1}
+      style={{ cursor: disabled ? "default" : "pointer" }}
+      onClick={() => !disabled && onRoll()}
+      onKeyDown={(e) => {
+        if (disabled) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onRoll();
+        }
+      }}
+    >
+      <rect x={x} y={y} width={w} height={h} rx={14} fill="#e7d3ab" stroke="#b08a4f" strokeWidth={2} />
+      <Die x={dieX} y={VB_H / 2 - dieSize / 2} size={dieSize} value={5} color={color} spent={false} />
+      <text x={labelX} y={VB_H / 2} textAnchor="middle" dominantBaseline="central" fontSize={22} fontWeight={700} fill="#1c1c1c">
+        Roll
+      </text>
+    </g>
+  );
+}
+
 export interface GlideAnim {
   fromBoard: StateView;
   submoves: SubmoveView[];
@@ -188,6 +227,8 @@ export interface BoardProps {
   animation: GlideAnim | null;
   onPick: (square: number) => void;
   onFlipDice?: () => void;
+  onRoll?: () => void; // present only on the human's (non-manual) roll turn; shows the centre pill
+  rollDisabled?: boolean; // dim the pill and ignore input while busy or animating
 }
 
 export default function Board({
@@ -201,6 +242,8 @@ export default function Board({
   animation,
   onPick,
   onFlipDice,
+  onRoll,
+  rollDisabled,
 }: BoardProps) {
   const [animBoard, setAnimBoard] = useState<StateView | null>(null);
   const [glide, setGlide] = useState<{ from: { x: number; y: number }; to: { x: number; y: number }; color: Color; ms: number } | null>(null);
@@ -352,6 +395,10 @@ export default function Board({
       </g>
 
       {glowRing}
+
+      {/* Roll control in the centre, where the dice will land. Only on the human's
+          roll turn, and never alongside dice (cleared to null before a roll). */}
+      {onRoll && !dice && <RollButton disabled={!!rollDisabled} onRoll={onRoll} color={diceColor} />}
 
       {/* Dice in the centre, coloured for the mover; click to flip the order. */}
       {dice && (

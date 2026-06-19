@@ -639,6 +639,8 @@ export default function App() {
             animation={animation}
             onPick={onPick}
             onFlipDice={canFlip ? () => setDiceSwapped((s) => !s) : undefined}
+            onRoll={toAct === humanColor && needsRoll && !manual ? () => roll() : undefined}
+            rollDisabled={busy || !!animation}
           />
           {showThinking && (
             <div className="thinking-overlay">
@@ -653,11 +655,6 @@ export default function App() {
 
       {gameId && !terminal && (
         <div className="actionbar">
-          {toAct === humanColor && needsRoll && !manual && (
-            <button onClick={() => roll()} disabled={busy || !!animation}>
-              Roll
-            </button>
-          )}
           {toAct === humanColor && needsRoll && manual && (
             <DiceEntry label="Your dice:" busy={busy} onSubmit={(d) => roll(d)} />
           )}
