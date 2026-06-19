@@ -126,6 +126,8 @@ explicitly, not an afterthought.
 | WP3 | Web server + play UI + gnubg/.mat/.sgf export + analysis pipeline | WP0 (needs move-sequence contract + checkpoint spec) | after WP0, parallel (use a dummy/random agent until WP1 lands) |
 | WP4 | LLM agent (OpenRouter) + prompt/format refinement harness + web opponent | WP0 | after WP0, parallel |
 | WP5 | (optional) AlphaZero-style: policy head + chance-node MCTS + self-play | WP0 | last |
+| WP6 | Full 5-head outcome training (gammon/bg) + doubling cube, money play | WP0 + WP1 + WP2 | after WP1; parallel to WP5 |
+| WP7 | Match play: cube to 7/11 pts + match equity table + Crawford | WP6 + WP3 | after WP6 |
 
 **Critical path:** WP0 is the integration risk. Freeze its contract before fan-out.
 A wrong contract forces rework in every parallel package.
