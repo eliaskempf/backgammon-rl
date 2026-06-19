@@ -12,6 +12,7 @@ from bgrl.training.calibration import (
     _ece,
     _realized_outcome,
     calibration_report,
+    reliability_table,
 )
 
 
@@ -41,6 +42,27 @@ def test_ece_detects_a_collapsed_head() -> None:
     predicted = np.zeros(400)
     realized = np.concatenate([np.ones(200), np.zeros(200)])
     assert _ece(predicted, realized, bins=10) == 0.5
+
+
+def test_reliability_table_partitions_samples_and_reduces_to_ece() -> None:
+    rng = np.random.default_rng(2)
+    predicted = rng.random(1000)
+    realized = (rng.random(1000) < predicted).astype(float)  # roughly calibrated
+    table = reliability_table(predicted, realized, bins=10)
+
+    # Every sample lands in exactly one populated bin, and bins are ordered & within [0, 1].
+    assert sum(b.count for b in table) == 1000
+    assert all(0.0 <= b.lo < b.hi <= 1.0 for b in table)
+    assert [b.lo for b in table] == sorted(b.lo for b in table)
+
+    # The table is the per-bin data behind _ece: re-reducing it must reproduce _ece exactly.
+    derived = sum((b.count / 1000) * abs(b.predicted_mean - b.realized_mean) for b in table)
+    assert derived == pytest.approx(_ece(predicted, realized, bins=10))
+
+
+def test_reliability_table_empty_input() -> None:
+    empty = np.zeros(0)
+    assert reliability_table(empty, empty, bins=10) == []
 
 
 class _ConstNet:

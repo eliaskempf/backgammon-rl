@@ -66,6 +66,22 @@ class CalibrationReport:
         return out
 
 
+@dataclass(frozen=True, slots=True)
+class ReliabilityBin:
+    """One probability bin of a single head's reliability curve.
+
+    ``predicted_mean`` is the mean prediction of the samples whose prediction fell in
+    ``[lo, hi)``; ``realized_mean`` is their mean realised indicator. A well-calibrated
+    head has ``predicted_mean ≈ realized_mean`` in every populated bin.
+    """
+
+    lo: float
+    hi: float
+    count: int
+    predicted_mean: float
+    realized_mean: float
+
+
 def _realized_outcome(outcome: Outcome, perspective: Player) -> np.ndarray:
     """The game's realised cumulative outcome 5-vector from ``perspective``'s POV.
 
@@ -124,21 +140,45 @@ def collect_predictions(
     return predicted, realized
 
 
-def _ece(predicted: np.ndarray, realized: np.ndarray, bins: int) -> float:
-    """Expected calibration error of one head: Σ_b (n_b/n)·|mean_pred_b - mean_real_b|."""
+def reliability_table(
+    predicted: np.ndarray, realized: np.ndarray, *, bins: int = 10
+) -> list[ReliabilityBin]:
+    """Reliability curve of one head: predicted vs realised within each probability bin.
+
+    Predictions are bucketed into ``bins`` equal-width bins over ``[0, 1]``; each populated
+    bin reports its sample count and mean predicted/realised values (empty bins are
+    omitted). This is the per-bin data behind :func:`_ece`, which is exactly the
+    sample-weighted ``|predicted_mean - realized_mean|`` summed over the returned bins.
+    """
     if predicted.size == 0:
-        return 0.0
+        return []
     edges = np.linspace(0.0, 1.0, bins + 1)
     # digitize against the interior edges so values map to bins 0..bins-1.
     idx = np.clip(np.digitize(predicted, edges[1:-1]), 0, bins - 1)
-    n = predicted.size
-    total = 0.0
+    table: list[ReliabilityBin] = []
     for b in range(bins):
         mask = idx == b
         count = int(mask.sum())
         if count:
-            total += (count / n) * abs(float(predicted[mask].mean()) - float(realized[mask].mean()))
-    return total
+            table.append(
+                ReliabilityBin(
+                    lo=float(edges[b]),
+                    hi=float(edges[b + 1]),
+                    count=count,
+                    predicted_mean=float(predicted[mask].mean()),
+                    realized_mean=float(realized[mask].mean()),
+                )
+            )
+    return table
+
+
+def _ece(predicted: np.ndarray, realized: np.ndarray, bins: int) -> float:
+    """Expected calibration error of one head: Σ_b (n_b/n)·|mean_pred_b - mean_real_b|."""
+    n = predicted.size
+    if n == 0:
+        return 0.0
+    table = reliability_table(predicted, realized, bins=bins)
+    return sum((b.count / n) * abs(b.predicted_mean - b.realized_mean) for b in table)
 
 
 def calibration_report(
