@@ -4,6 +4,7 @@
 ``(Move, afterstate)`` list — and is all a non-learning agent (random, LLM,
 expectimax) needs. :class:`LearningAgent` adds the self-play lifecycle hooks the
 online trainers (WP1's TD(λ)) use to learn from the games they generate.
+:class:`CubeCapable` is the optional WP6 doubling-cube extension.
 
 Move generation lives in the env, not the agent, so every algorithm consumes the
 same afterstate enumeration; only selection (and, for learners, the update rule)
@@ -12,9 +13,12 @@ differ.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from bgrl.env import Dice, EnvState, Move, Outcome
+
+if TYPE_CHECKING:
+    from bgrl.nets.equity import CubeContext
 
 
 @runtime_checkable
@@ -55,4 +59,30 @@ class LearningAgent(Agent, Protocol):
 
     def observe_game_end(self, outcome: Outcome) -> None:
         """Record the terminal result (absolute winner + magnitude)."""
+        ...
+
+
+@runtime_checkable
+class CubeCapable(Protocol):
+    """An agent that supplies its **own** doubling-cube policy (WP6, money play).
+
+    An optional extension to :class:`Agent`, intentionally a *separate* protocol so it
+    does not widen the :class:`Agent` contract (existing agents stay structurally
+    ``Agent`` without implementing these). The money-game loop asks an agent for its cube
+    decisions only when it satisfies this protocol; otherwise it falls back to a shared
+    :class:`~bgrl.nets.cube.CubeDecider` over the agent's position evaluator (see
+    :mod:`bgrl.agents.cube_policy`). Implement both methods to override — an LLM's own
+    cube sense, a deliberately weak policy, a fixed never-double opponent.
+
+    ``cube`` is the live :class:`~bgrl.nets.equity.CubeContext`; ``state.turn`` is the
+    player being asked (the on-roll doubler for ``should_double``, the responder for
+    ``should_take``).
+    """
+
+    def should_double(self, state: EnvState, cube: CubeContext) -> bool:
+        """Whether the on-roll player offers a double in ``state``."""
+        ...
+
+    def should_take(self, state: EnvState, cube: CubeContext) -> bool:
+        """Whether to take (vs pass) a double offered in ``state``."""
         ...

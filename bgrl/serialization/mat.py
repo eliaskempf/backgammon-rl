@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
     from bgrl.env import Dice, Move
     from bgrl.game import Step
+    from bgrl.money import CubeEvent, MoneyGameResult
 
 # Layout constants, pinned to gnubg's own ``export match mat`` so our files round-trip.
 # The left (player-1 / WHITE) move cell is padded to this width before the right cell;
@@ -118,12 +119,53 @@ def _move_cell(step: Step) -> str:
     return f"{head} {' '.join(tokens)}".rstrip() if tokens else head
 
 
-def _win_line(outcome: Outcome) -> str:
+def _wins_line(points: int, winner: Player) -> str:
     """The game-result line, in the winner's column (left for WHITE, right for BLACK)."""
-    points = int(outcome.kind)
     text = f"Wins {points} point{'s' if points != 1 else ''}"
-    left, right = (text, "") if outcome.winner is Player.WHITE else ("", text)
+    left, right = (text, "") if winner is Player.WHITE else ("", text)
     return _INDENT + _two_columns(left, right)
+
+
+def _win_line_for(outcome: Outcome | None, cube_events: Sequence[CubeEvent]) -> str | None:
+    """The win line: a drop awards the doubler the pre-double stake; else the played magnitude.
+
+    ``None`` for an unfinished, undropped game (no win line). On a drop (last cube event not
+    taken) the doubler wins ``from_value`` points; otherwise the magnitude (single / gammon /
+    backgammon) — the cube value rides on the ``Doubles =>`` tokens, not the win line.
+    """
+    if cube_events and not cube_events[-1].taken:  # game ended on a drop
+        ev = cube_events[-1]
+        return _wins_line(ev.from_value, ev.doubler)
+    if outcome is not None:
+        return _wins_line(int(outcome.kind), outcome.winner)
+    return None
+
+
+def _cells(steps: Sequence[Step], cube_events: Sequence[CubeEvent]) -> list[tuple[Player, str]]:
+    """The chronological ``(player, cell)`` actions, interleaving cube actions with moves.
+
+    A double contributes two actions — ``Doubles => N`` for the doubler and ``Takes`` /
+    ``Drops`` for the opponent — inserted before the ply they precede. Because the doubler
+    is exactly that ply's mover, this preserves the strict WHITE/BLACK alternation the round
+    grid relies on (WHITE first), so consecutive cells pair cleanly into numbered rounds. A
+    drop's event sits at ``ply == len(steps)`` (after the last recorded move).
+    """
+    by_ply: dict[int, list[CubeEvent]] = {}
+    for ev in cube_events:
+        by_ply.setdefault(ev.ply, []).append(ev)
+
+    cells: list[tuple[Player, str]] = []
+
+    def emit_cube(ply: int) -> None:
+        for ev in by_ply.get(ply, ()):
+            cells.append((ev.doubler, f"Doubles => {ev.to_value}"))
+            cells.append((ev.doubler.opponent(), "Takes" if ev.taken else "Drops"))
+
+    for i, step in enumerate(steps):
+        emit_cube(i)
+        cells.append((step.state.turn, _move_cell(step)))
+    emit_cube(len(steps))
+    return cells
 
 
 def _game_block(
@@ -133,29 +175,33 @@ def _game_block(
     number: int,
     white_name: str,
     black_name: str,
+    cube_events: Sequence[CubeEvent] = (),
 ) -> list[str]:
-    """A ``Game N`` block: header, the **player-names line**, moves, and the win line.
+    """A ``Game N`` block: header, the **player-names line**, moves/cube actions, win line.
 
     gnubg's importer reads the line right after ``Game N`` as the two players' names, so
-    it must sit here (inside the game), not up in the match header.
+    it must sit here (inside the game), not up in the match header. With no ``cube_events``
+    this renders exactly the cubeless layout (the cells are just the moves).
     """
     # gnubg's names line is ``<name> : <score>`` per column (score is 0 for a money
     # session); a bare name desyncs its importer and the whole match fails to load.
     names = " " + _two_columns(f"{_safe_name(white_name)} : 0", f"{_safe_name(black_name)} : 0")
     lines = [f" Game {number}", names]
-    # WHITE is player 1; turns strictly alternate, so even steps are WHITE, odd BLACK.
-    rounds = (len(steps) + 1) // 2
+    # WHITE is player 1; moves and cube actions alternate WHITE/BLACK, so pair them by index.
+    cells = _cells(steps, cube_events)
+    rounds = (len(cells) + 1) // 2
     for r in range(rounds):
-        white = _move_cell(steps[2 * r])
-        black = _move_cell(steps[2 * r + 1]) if 2 * r + 1 < len(steps) else ""
+        white = cells[2 * r][1]
+        black = cells[2 * r + 1][1] if 2 * r + 1 < len(cells) else ""
         lines.append(f"{r + 1:3d}) " + _two_columns(white, black))
-    if outcome is not None:
-        lines.append(_win_line(outcome))
+    win = _win_line_for(outcome, cube_events)
+    if win is not None:
+        lines.append(win)
     return lines
 
 
 def match_to_mat(
-    games: Sequence[tuple[Sequence[Step], Outcome | None]],
+    games: Sequence[tuple[Sequence[Step], Outcome | None] | tuple[object, ...]],
     *,
     white_name: str = "White",
     black_name: str = "Black",
@@ -163,18 +209,48 @@ def match_to_mat(
 ) -> str:
     """Render one or more games as a single Jellyfish ``.mat`` match (one match/file).
 
-    ``match_length=0`` is a money/cubeless session — the right choice for v1. Each game
-    is a ``(steps, outcome)`` pair; ``outcome=None`` (an unfinished game) simply omits
-    the win line. WHITE is player 1 in every game (the env always opens with WHITE).
+    ``match_length=0`` is a money session. Each game is a ``(steps, outcome)`` pair, or a
+    ``(steps, outcome, cube_events)`` triple to record doubling-cube actions (WP6);
+    ``outcome=None`` (an unfinished or dropped game) omits / overrides the win line via the
+    cube events. WHITE is player 1 in every game (the env always opens with WHITE).
     """
     # Leading space matches gnubg's own export; its importer keys on "point match".
     lines = [f" {match_length} point match"]
-    for i, (steps, outcome) in enumerate(games, start=1):
+    for i, game in enumerate(games, start=1):
+        steps, outcome = game[0], game[1]
+        cube_events = game[2] if len(game) > 2 else ()
         lines.append("")
         lines.extend(
-            _game_block(steps, outcome, number=i, white_name=white_name, black_name=black_name)
+            _game_block(
+                steps,
+                outcome,
+                number=i,
+                white_name=white_name,
+                black_name=black_name,
+                cube_events=cube_events,
+            )
         )
     return "\n".join(lines) + "\n"
+
+
+def money_game_to_mat(
+    result: MoneyGameResult,
+    *,
+    white_name: str = "White",
+    black_name: str = "Black",
+) -> str:
+    """Render a :class:`~bgrl.money.MoneyGameResult` (doubling cube included) as a ``.mat``.
+
+    The cube history (``Doubles =>`` / ``Takes`` / ``Drops``) is interleaved with the moves
+    and a drop is recorded with the doubler winning the pre-double stake — so gnubg imports a
+    faithful money game, cube and all. The exact cube-token spelling is the Jellyfish
+    convention; like the rest of this module it is pinned by the gnubg round-trip test.
+    """
+    return match_to_mat(
+        [(result.steps, result.outcome, result.cube_events)],
+        white_name=white_name,
+        black_name=black_name,
+    )
 
 
 def game_to_mat(

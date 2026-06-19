@@ -11,7 +11,8 @@ import numpy as np
 from bgrl.agents import RandomAgent
 from bgrl.env import BAR, OFF, EnvState, Move, Player, RandomDiceSource, SubMove, apply_submove
 from bgrl.game import Step, play_game
-from bgrl.serialization.mat import game_to_mat, match_to_mat, point_number
+from bgrl.money import play_money_game
+from bgrl.serialization.mat import game_to_mat, match_to_mat, money_game_to_mat, point_number
 
 
 def _random_game(seed):
@@ -158,3 +159,59 @@ def test_match_to_mat_emits_multiple_game_blocks():
     mat = match_to_mat([g0, g1])
     assert "\n Game 1\n" in mat
     assert "\n Game 2\n" in mat
+
+
+# --- doubling-cube export (WP6) --------------------------------------------------------
+
+
+class _CubeBot:
+    """A CubeCapable bot: greedy first-legal play, fixed cube policy."""
+
+    def __init__(self, *, double_from_centered: bool, take: bool) -> None:
+        self._double = double_from_centered
+        self._take = take
+
+    def act(self, state, dice, legal):
+        return legal[0][0]
+
+    def should_double(self, state, cube) -> bool:
+        return self._double and cube.value == 1 and cube.owner is None
+
+    def should_take(self, state, cube) -> bool:
+        return self._take
+
+
+def _money(white_double, white_take, black_double, black_take, seed=0):
+    white = _CubeBot(double_from_centered=white_double, take=white_take)
+    black = _CubeBot(double_from_centered=black_double, take=black_take)
+    return play_money_game(white, black, RandomDiceSource(np.random.default_rng(seed)))
+
+
+def test_money_mat_records_a_taken_double():
+    # WHITE doubles on ply 0, BLACK takes, the game plays out.
+    res = _money(True, True, False, True, seed=7)
+    assert len(res.cube_events) == 1 and res.cube_events[0].taken
+    mat = money_game_to_mat(res)
+    assert "Doubles => 2" in mat
+    assert "Takes" in mat
+    assert "Drops" not in mat
+
+
+def test_money_mat_records_a_drop_with_doubler_win_line():
+    # WHITE doubles on ply 0, BLACK drops -> WHITE wins the pre-double 1-point stake.
+    res = _money(True, True, False, False)
+    assert res.dropped and res.cube_events[0].taken is False
+    mat = money_game_to_mat(res)
+    assert "Doubles => 2" in mat
+    assert "Drops" in mat
+    # The win line sits in WHITE's (left) column with no second cell.
+    win = next(ln for ln in mat.splitlines() if "Wins" in ln)
+    assert win.strip() == "Wins 1 point"
+
+
+def test_money_mat_without_doubles_has_no_cube_tokens():
+    res = _money(False, True, False, True, seed=3)  # neither side ever doubles
+    assert res.cube_events == ()
+    mat = money_game_to_mat(res)
+    assert "Doubles" not in mat
+    assert "Takes" not in mat and "Drops" not in mat

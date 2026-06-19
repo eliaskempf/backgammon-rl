@@ -249,3 +249,51 @@ more total training, no new cube/match hyperparameters.
   decisions are pre-roll). This is an evaluator-depth choice, not an agent-wrapping choice.
 - `x ≈ 2/3` default for Janowski is a starting point; the gnubg cross-check (B4) is what
   tunes it.
+
+---
+
+## Implementation notes (as built)
+
+Branch `wp6-multihead-cube` in its own worktree. `uv run pytest` and `ruff` green
+(the live-gnubg tests run here, since gnubg is installed).
+
+**Part A.**
+- A0 — one canonical `flip_outcome` + `FLIP_PERM`/`FLIP_SIGN` in `bgrl/nets/equity.py`,
+  reused by the TD target *and* the cube evaluator so they cannot drift.
+- A2 — multi-head `TDLambda`: full 5-vector `_value_vec`, per-head traces
+  `list[list[Tensor]]`, the bootstrap target is `flip_outcome(V(a_t))`, and the trace
+  carry is `λ·γ·FLIP_SIGN[k] · e_{t-1}[FLIP_PERM[k]] + ∇f_k`. **Confirmed: head 0 keeps
+  the scalar `-λγ` carry; the swapped gammon/bg pairs carry `+λγ`** — pinned by the
+  per-head MC/λ equivalence test at `λ=0.5` with forced GAMMON/BACKGAMMON outcomes.
+  `episode_end` now consumes `outcome.kind`.
+- A2b — `bgrl/training/td_lambda_exercise.py`: non-blocking self-study scaffold with
+  `TODO(human)` on the three learning-critical pieces (bootstrap flip, trace carry,
+  terminal target). Not imported anywhere; the real `td_lambda.py` is what trains.
+- A4 — `bgrl/training/calibration.py` (per-head predicted-vs-realised + ECE), wired into
+  `scripts/train.py` via `--calib-games` (own `calibration.csv` + W&B `cal/*`).
+- A6 — hidden width is already a `train.py --hidden` knob (sweep `{64,128}` operationally);
+  `scripts/aggregate_runs.py` now surfaces the win-gammon/bg head ECEs for selection.
+
+**Part B.**
+- B2 — `cubeful_equity` (Janowski), `CubeAccess`, `win_loss_magnitudes`, `cube_access`,
+  `DEFAULT_CUBE_LIFE = 2/3` in `equity.py`.
+- B3 — `CubeDecider`/`CubeAction`/`TakeAction` in `bgrl/nets/cube.py` (pure); the
+  `PositionEvaluator` protocol + 1-ply `NetEvaluator` (Adapter A) + dispatchers
+  (`wants_to_double`/`wants_to_take`/`evaluator_for`) in `bgrl/agents/cube_policy.py`.
+  **Deviation:** the agent hook is a *separate* `CubeCapable` protocol, not an extension
+  of `Agent`, because `isinstance(_, Agent)` is relied on widely and widening it would
+  break existing agents. The n-ply vector evaluator (Adapter B) is deferred behind the B4
+  trigger — 1-ply already matches gnubg.
+- B4 — `bgrl/money.py` (`play_money_game` + `MoneyGameResult`/`CubeEvent`); the cube is a
+  **loop-local `CubeContext` applied analytically and never fed into the net encoding**
+  (B0: net stays cubeless; `EnvState`'s cube slots stay reserved/zero). `money_game_to_mat`
+  emits `Doubles =>`/`Takes`/`Drops` — **verified to round-trip through gnubg**.
+  `analyse_cube` extracts gnubg's `probs`/`nd-cubeful-eq`/`dt-cubeful-eq`; feeding gnubg's
+  own probs into our formula reproduces its no-double equity to ~0.002 at `x = 2/3`, so
+  **the 2/3 default is confirmed, no tuning needed**.
+- Shared refactors (DRY): `WEIGHTED_ROLLS`/`weighted_rolls` moved to `bgrl/env/dice.py`
+  and `outcome_to_vector` to `equity.py`; `ExpectimaxAgent` now consumes both.
+
+**Open / deferred:** Adapter B (n-ply vector cube evaluator) only if a future cross-check
+shows 1-ply disagreeing with gnubg; A5 rollout fine-tuning only if the A4 diagnostic shows
+a collapsed bg/gammon head after a real training run.

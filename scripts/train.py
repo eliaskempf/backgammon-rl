@@ -47,6 +47,12 @@ def main() -> None:
     )
     parser.add_argument("--eval-pairs", type=int, default=100, help="CRN game-pairs per eval")
     parser.add_argument(
+        "--calib-games",
+        type=int,
+        default=0,
+        help="self-play games for the per-head calibration diagnostic each eval (0=off)",
+    )
+    parser.add_argument(
         "--eval-opponent",
         default="pubeval",
         help="eval opponent: 'pubeval', 'random', or a checkpoint path",
@@ -75,6 +81,7 @@ def main() -> None:
     from bgrl.game import GameResult
     from bgrl.nets.value_net import MLPValueNet
     from bgrl.serialization import load_agent, load_checkpoint, load_net, save_checkpoint
+    from bgrl.training.calibration import HEAD_NAMES, calibration_report
     from bgrl.training.evaluate import play_match
     from bgrl.training.loop import train
 
@@ -103,7 +110,9 @@ def main() -> None:
             if cli_v != stored_v:
                 print(f"WARNING: resuming with stored {name}={stored_v} (CLI {cli_v} ignored)")
         torch.manual_seed(seed)  # harmless — weights are loaded, not re-initialised
-        train_rng, eval_rng = np.random.default_rng(seed).spawn(2)
+        # spawn(3) leaves the first two children (train, eval) bit-identical to the old
+        # spawn(2), so resume stays bit-exact; calib_rng is eval-only, re-derived fresh.
+        train_rng, eval_rng, calib_rng = np.random.default_rng(seed).spawn(3)
         train_rng.bit_generator.state = meta["train_rng_state"]
         eval_rng.bit_generator.state = meta["eval_rng_state"]
     else:
@@ -111,8 +120,9 @@ def main() -> None:
         eval_opponent, wandb_run_id = args.eval_opponent, None
         start, best_win_rate = 0, -1.0
         torch.manual_seed(seed)  # reproducible net initialisation
-        # Two INDEPENDENT streams: training dice must never be perturbed by eval.
-        train_rng, eval_rng = np.random.default_rng(seed).spawn(2)
+        # Three INDEPENDENT streams: training dice must never be perturbed by eval or by
+        # the calibration diagnostic (eval and calib must not perturb each other either).
+        train_rng, eval_rng, calib_rng = np.random.default_rng(seed).spawn(3)
         net = MLPValueNet(hidden=args.hidden)
 
     agent = TDAgent(net, lam=lam, lr=lr, gamma=gamma)
@@ -146,6 +156,21 @@ def main() -> None:
     if write_header:
         metrics.writerow(["games", "win_rate", "avg_plies", "truncated"])
         metrics_file.flush()
+
+    # Per-head calibration goes to its own CSV (its own schema, keeps metrics.csv stable).
+    calib_columns = [
+        f"cal/{name}_{stat}" for name in HEAD_NAMES for stat in ("pred", "real", "ece")
+    ]
+    calib_file = None
+    calib_writer = None
+    if args.calib_games:
+        calib_path = args.out_dir / "calibration.csv"
+        calib_header = not (resuming and calib_path.exists())
+        calib_file = calib_path.open("a" if resuming else "w", newline="")
+        calib_writer = csv.writer(calib_file)
+        if calib_header:
+            calib_writer.writerow(["games", *calib_columns])
+            calib_file.flush()
 
     wandb_run = None
     if args.wandb:
@@ -207,19 +232,29 @@ def main() -> None:
         )
         metrics.writerow([n, res.win_rate_a, res.avg_plies, res.truncated])
         metrics_file.flush()
+        log: dict[str, float] = {
+            "win_rate": res.win_rate_a,
+            "avg_plies": res.avg_plies,
+            "truncated": res.truncated,
+        }
+        # Per-head calibration: did the gammon/backgammon heads learn or collapse to ~0?
+        if args.calib_games and calib_writer is not None and calib_file is not None:
+            report = calibration_report(net, games=args.calib_games, rng=calib_rng)
+            cal = report.to_metrics()
+            calib_writer.writerow([n, *(cal[c] for c in calib_columns)])
+            calib_file.flush()
+            log |= cal
+            print(
+                "  calibration "
+                + "  ".join(
+                    f"{h.name} p{h.predicted_mean:.3f}/r{h.realized_mean:.3f}" for h in report.heads
+                )
+            )
         if wandb_run is not None:
             # commit=True is required: with an explicit `step`, wandb defaults to
             # commit=False, which buffers each eval's metrics until the *next* eval (so
             # the live dashboard lags one eval and shows only system metrics early on).
-            wandb_run.log(
-                {
-                    "win_rate": res.win_rate_a,
-                    "avg_plies": res.avg_plies,
-                    "truncated": res.truncated,
-                },
-                step=n,
-                commit=True,
-            )
+            wandb_run.log(log, step=n, commit=True)
         if res.win_rate_a > best_win_rate:
             best_win_rate = res.win_rate_a
             save_checkpoint(
@@ -267,6 +302,8 @@ def main() -> None:
         print(f"signal received: checkpointed at game {exit_.games_done} for resume; exiting")
     finally:
         metrics_file.close()
+        if calib_file is not None:
+            calib_file.close()
         if wandb_run is not None:
             wandb_run.finish()
 

@@ -68,6 +68,28 @@ class SideSummary:
     agreement: float  # fraction of moves matching gnubg's preferred play
 
 
+@dataclass(frozen=True, slots=True)
+class CubeAnalysis:
+    """gnubg's cube verdict on one on-roll position (the WP6 cube cross-check oracle).
+
+    ``probs`` is gnubg's cubeless outcome distribution in **our** layout
+    ``[p_win, p_win_gammon, p_win_bg, p_lose_gammon, p_lose_bg]`` (on-roll POV) — so it
+    can be fed straight into :func:`~bgrl.nets.equity.cubeful_equity` to validate the
+    Janowski formula independently of net quality. ``nd_equity`` / ``dt_equity`` are
+    gnubg's no-double and double-take cubeful equities. ``action_kind`` is ``"double"``
+    when the move actually made was a cube turn, else ``"move"`` (a no-double position).
+    """
+
+    game: int
+    ply: int
+    player: str
+    probs: tuple[float, ...]
+    nd_equity: float
+    dt_equity: float
+    action_kind: str
+    skill: str | None
+
+
 def gnubg_available(gnubg_bin: str = "gnubg") -> bool:
     """True if the gnubg binary is on ``PATH`` (gates the live pipeline + its tests)."""
     return shutil.which(gnubg_bin) is not None
@@ -88,18 +110,20 @@ def summarize(moves: list[MoveAnalysis]) -> dict[str, SideSummary]:
     return out
 
 
-def analyse_mat(
+def _run_gnubg(
     mat_path: Path | str,
+    script: str,
     *,
-    plies: int = 2,
-    gnubg_bin: str = "gnubg",
-    timeout: float = 300.0,
-) -> list[MoveAnalysis]:
-    """Analyse every chequer play in a ``.mat`` file and return per-move equity loss.
+    plies: int,
+    gnubg_bin: str,
+    timeout: float,
+) -> list[dict]:
+    """Run a gnubg extraction ``script`` over ``mat_path`` and return the parsed JSON list.
 
-    Runs gnubg headlessly at ``plies`` (gnubg's own numbering, CLAUDE.md §9). Raises
-    :class:`RuntimeError` if gnubg is missing or its run fails — callers that want
-    graceful skipping should guard with :func:`gnubg_available` first.
+    Shared boilerplate for the analysis entry points: imports + analyses the match at
+    ``plies`` inside gnubg's embedded Python (the script does that) and reads back the
+    JSON the script writes to ``BGRL_OUT``. Raises :class:`RuntimeError` if gnubg is
+    missing or produced no output.
     """
     mat_path = Path(mat_path)
     if shutil.which(gnubg_bin) is None:
@@ -108,9 +132,9 @@ def analyse_mat(
         raise FileNotFoundError(mat_path)
 
     with tempfile.TemporaryDirectory() as tmp:
-        script_path = Path(tmp) / "analyse.py"
-        out_path = Path(tmp) / "analysis.json"
-        script_path.write_text(_GNUBG_SCRIPT)
+        script_path = Path(tmp) / "script.py"
+        out_path = Path(tmp) / "out.json"
+        script_path.write_text(script)
         env = {
             **os.environ,
             "BGRL_MAT": str(mat_path.resolve()),
@@ -129,8 +153,23 @@ def analyse_mat(
                 "gnubg analysis produced no output\n"
                 f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
             )
-        raw = json.loads(out_path.read_text())
+        return json.loads(out_path.read_text())
 
+
+def analyse_mat(
+    mat_path: Path | str,
+    *,
+    plies: int = 2,
+    gnubg_bin: str = "gnubg",
+    timeout: float = 300.0,
+) -> list[MoveAnalysis]:
+    """Analyse every chequer play in a ``.mat`` file and return per-move equity loss.
+
+    Runs gnubg headlessly at ``plies`` (gnubg's own numbering, CLAUDE.md §9). Raises
+    :class:`RuntimeError` if gnubg is missing or its run fails — callers that want
+    graceful skipping should guard with :func:`gnubg_available` first.
+    """
+    raw = _run_gnubg(mat_path, _GNUBG_SCRIPT, plies=plies, gnubg_bin=gnubg_bin, timeout=timeout)
     return [
         MoveAnalysis(
             game=r["game"],
@@ -141,6 +180,40 @@ def analyse_mat(
             best_move=r["best_move"],
             equity_made=r["equity_made"],
             equity_best=r["equity_best"],
+        )
+        for r in raw
+    ]
+
+
+def analyse_cube(
+    mat_path: Path | str,
+    *,
+    plies: int = 2,
+    gnubg_bin: str = "gnubg",
+    timeout: float = 300.0,
+) -> list[CubeAnalysis]:
+    """Extract gnubg's cube verdict for every cube-eligible on-roll position in a ``.mat``.
+
+    The acceptance oracle for the WP6 doubling cube: gnubg's ``probs`` (a cubeless outcome
+    distribution in our layout) and its no-double / double-take cubeful equities let us
+    validate :func:`~bgrl.nets.equity.cubeful_equity` and
+    :class:`~bgrl.nets.cube.CubeDecider` against gnubg — feeding gnubg's *own* ``probs``
+    into our formula isolates the cube math from net quality. Same gnubg/ply contract as
+    :func:`analyse_mat`.
+    """
+    raw = _run_gnubg(
+        mat_path, _GNUBG_CUBE_SCRIPT, plies=plies, gnubg_bin=gnubg_bin, timeout=timeout
+    )
+    return [
+        CubeAnalysis(
+            game=r["game"],
+            ply=r["ply"],
+            player=r["player"],
+            probs=tuple(r["probs"]),
+            nd_equity=r["nd_equity"],
+            dt_equity=r["dt_equity"],
+            action_kind=r["action_kind"],
+            skill=r["skill"],
         )
         for r in raw
     ]
@@ -220,6 +293,55 @@ for gi, g in enumerate(games):
             "equity_made": float(made.get("score")),
             "equity_best": float(best.get("score")),
         })
+
+open(out, "w").write(json.dumps(records))
+"""
+
+
+# Cube-decision extraction: any action gnubg attached a cube analysis to (a "double"
+# action, or a "move" whose pre-roll position was cube-eligible) carries "nd-cubeful-eq"
+# (no-double equity), "dt-cubeful-eq" (double-take equity) and "probs" — the cubeless
+# outcome distribution [win, win_g, win_bg, lose_g, lose_bg], on-roll POV, our layout.
+_GNUBG_CUBE_SCRIPT = r"""
+import os, json
+import gnubg
+
+mat = os.environ["BGRL_MAT"]
+out = os.environ["BGRL_OUT"]
+plies = int(os.environ.get("BGRL_PLIES", "2"))
+
+gnubg.command("set analysis chequerplay evaluation plies %d" % plies)
+gnubg.command("set analysis cubedecision evaluation plies %d" % plies)
+gnubg.command("import mat %s" % mat)
+gnubg.command("analyse match")
+
+m = gnubg.match(analysis=1, boards=0)
+
+PLAYER_NAME = {"X": "White", "O": "Black", 0: "White", 1: "Black"}
+
+records = []
+games = m["games"] if isinstance(m, dict) else m
+for gi, g in enumerate(games):
+    actions = g["game"] if isinstance(g, dict) else g
+    ply = 0
+    for action in actions:
+        kind = action.get("action") or action.get("type")
+        analysis = action.get("analysis") or {}
+        nd = analysis.get("nd-cubeful-eq")
+        probs = analysis.get("probs")
+        if nd is not None and probs is not None:
+            records.append({
+                "game": gi,
+                "ply": ply,
+                "player": PLAYER_NAME.get(action.get("player"), str(action.get("player"))),
+                "probs": [float(x) for x in probs],
+                "nd_equity": float(nd),
+                "dt_equity": float(analysis.get("dt-cubeful-eq")),
+                "action_kind": str(kind),
+                "skill": analysis.get("skill"),
+            })
+        if kind == "move":
+            ply += 1
 
 open(out, "w").write(json.dumps(records))
 """

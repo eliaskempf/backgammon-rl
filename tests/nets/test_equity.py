@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from bgrl.nets import CENTERED_CUBE, OUTCOME_DIM, equity
+from bgrl.nets import CENTERED_CUBE, OUTCOME_DIM, equity, flip_outcome
 
 
 def _vec(p_win=0.0, p_wg=0.0, p_wbg=0.0, p_lg=0.0, p_lbg=0.0):
@@ -38,6 +38,30 @@ def test_anti_symmetry():
     flipped = o[:, [0, 3, 4, 1, 2]].copy()
     flipped[:, 0] = 1.0 - o[:, 0]
     assert np.allclose(equity(o) + equity(flipped), 0.0, atol=1e-12)
+
+
+def test_flip_outcome_matches_manual_permutation():
+    # flip_outcome is the canonical [1-s0, s3, s4, s1, s2] perspective flip.
+    o = _vec(p_win=0.7, p_wg=0.3, p_wbg=0.1, p_lg=0.2, p_lbg=0.05)
+    assert np.allclose(flip_outcome(o), [1.0 - 0.7, 0.2, 0.05, 0.3, 0.1])
+
+
+def test_flip_outcome_is_an_involution():
+    rng = np.random.default_rng(1)
+    o = rng.random((20, OUTCOME_DIM))
+    assert np.allclose(flip_outcome(flip_outcome(o)), o, atol=1e-12)
+
+
+def test_flip_outcome_negates_equity():
+    # The flip is exactly the perspective change equity is anti-symmetric under.
+    rng = np.random.default_rng(2)
+    o = rng.random((50, OUTCOME_DIM))
+    assert np.allclose(equity(flip_outcome(o)) + equity(o), 0.0, atol=1e-12)
+
+
+def test_flip_outcome_vectorised_shapes():
+    assert flip_outcome(_vec(p_win=0.5)).shape == (OUTCOME_DIM,)
+    assert flip_outcome(np.zeros((3, 4, OUTCOME_DIM))).shape == (3, 4, OUTCOME_DIM)
 
 
 def test_vectorised_shapes():

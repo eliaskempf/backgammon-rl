@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 
 from bgrl.agents import ExpectimaxAgent, ValueAgent
-from bgrl.agents.expectimax_agent import _WEIGHTED_ROLLS, _terminal_equity
-from bgrl.env import OFF, Env, EnvState, Move, Outcome, Player, SubMove, WinKind
+from bgrl.agents.expectimax_agent import _terminal_equity
+from bgrl.env import OFF, WEIGHTED_ROLLS, Env, EnvState, Move, Outcome, Player, SubMove, WinKind
 from bgrl.env.encoding import N_FEATURES
 from bgrl.nets.equity import CENTERED_CUBE
 
@@ -108,15 +108,15 @@ def test_plies0_issues_single_net_call():
 
 
 def test_weighted_rolls_distribution():
-    assert len(_WEIGHTED_ROLLS) == 21
-    assert sum(w for _, w in _WEIGHTED_ROLLS) == pytest.approx(1.0)
-    doubles = [(r, w) for r, w in _WEIGHTED_ROLLS if r[0] == r[1]]
-    nondoubles = [(r, w) for r, w in _WEIGHTED_ROLLS if r[0] != r[1]]
+    assert len(WEIGHTED_ROLLS) == 21
+    assert sum(w for _, w in WEIGHTED_ROLLS) == pytest.approx(1.0)
+    doubles = [(r, w) for r, w in WEIGHTED_ROLLS if r[0] == r[1]]
+    nondoubles = [(r, w) for r, w in WEIGHTED_ROLLS if r[0] != r[1]]
     assert len(doubles) == 6 and all(w == pytest.approx(1 / 36) for _, w in doubles)
     assert len(nondoubles) == 15 and all(w == pytest.approx(2 / 36) for _, w in nondoubles)
     assert all(a < b for (a, b), _ in nondoubles)  # each non-double listed once, no reversal
     # total 36-outcome mass: doubles count once, non-doubles twice
-    assert sum(1 if a == b else 2 for (a, b), _ in _WEIGHTED_ROLLS) == 36
+    assert sum(1 if a == b else 2 for (a, b), _ in WEIGHTED_ROLLS) == 36
 
 
 # --- 3. exact terminal scoring ---------------------------------------------------------

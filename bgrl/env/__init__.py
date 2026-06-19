@@ -5,7 +5,15 @@
 
 from .apply import apply_submove
 from .board import initial_board
-from .dice import DiceSource, ManualDiceSource, RandomDiceSource, ReplayDiceSource, roll_dice
+from .dice import (
+    WEIGHTED_ROLLS,
+    DiceSource,
+    ManualDiceSource,
+    RandomDiceSource,
+    ReplayDiceSource,
+    roll_dice,
+    weighted_rolls,
+)
 from .encoding import ENCODING_VERSION, N_FEATURES, encode
 from .env import Env
 from .movegen import legal_moves, legal_orderings, move_dice
@@ -17,6 +25,7 @@ __all__ = [
     "ENCODING_VERSION",
     "N_FEATURES",
     "OFF",
+    "WEIGHTED_ROLLS",
     "Dice",
     "DiceSource",
     "Env",
@@ -38,4 +47,5 @@ __all__ = [
     "move_dice",
     "outcome",
     "roll_dice",
+    "weighted_rolls",
 ]

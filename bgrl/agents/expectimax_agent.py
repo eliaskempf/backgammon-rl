@@ -29,6 +29,7 @@ import numpy as np
 
 from bgrl.agents.value_agent import ValueAgent
 from bgrl.env import (
+    WEIGHTED_ROLLS,
     Dice,
     EnvState,
     Move,
@@ -39,52 +40,20 @@ from bgrl.env import (
     legal_moves,
     outcome,
 )
-from bgrl.nets.base import OUTCOME_DIM, ValueNet
-from bgrl.nets.equity import CENTERED_CUBE, CubeContext, equity
+from bgrl.nets.base import ValueNet
+from bgrl.nets.equity import CENTERED_CUBE, CubeContext, equity, outcome_to_vector
 
 _TIE_TOLERANCE = 1e-9
-
-
-def _weighted_rolls() -> tuple[tuple[Dice, float], ...]:
-    """The 21 distinct dice rolls with probabilities: doubles 1/36, non-doubles 2/36.
-
-    Each non-double is listed once as ``(a, b)`` with ``a < b``; :func:`legal_moves`
-    already explores both die orderings internally, so listing ``(b, a)`` too would
-    double-count. The weights sum to exactly 1.
-    """
-    rolls: list[tuple[Dice, float]] = []
-    for a in range(1, 7):
-        for b in range(a, 7):
-            rolls.append(((a, b), (1.0 if a == b else 2.0) / 36.0))
-    return tuple(rolls)
-
-
-_WEIGHTED_ROLLS = _weighted_rolls()
 
 
 def _terminal_equity(result: Outcome, perspective: Player, cube: CubeContext) -> float:
     """Exact equity of a finished game to ``perspective`` (+/-1, 2, 3), via :func:`equity`.
 
-    Builds the cumulative outcome 5-vector for ``result`` from ``perspective``'s point of
-    view and reduces it through the shared :func:`~bgrl.nets.equity.equity`, so the
-    win-magnitude scoring stays consistent with the net's equity reduction. Note that a
-    single *loss* is the all-zeros vector: its -1 comes from the implied
-    ``p_lose = 1 - p_win`` inside :func:`equity`, not from any explicit head.
+    Reduces the cumulative outcome 5-vector (:func:`~bgrl.nets.equity.outcome_to_vector`)
+    through the shared :func:`~bgrl.nets.equity.equity`, so the win-magnitude scoring
+    stays consistent with the net's equity reduction.
     """
-    vec = np.zeros(OUTCOME_DIM, dtype=np.float64)
-    kind = int(result.kind)
-    if result.winner is perspective:
-        vec[0] = 1.0  # p_win
-        if kind >= 2:
-            vec[1] = 1.0  # p_win_gammon (cumulative: gammon or better)
-        if kind >= 3:
-            vec[2] = 1.0  # p_win_backgammon
-    else:
-        if kind >= 2:
-            vec[3] = 1.0  # p_lose_gammon
-        if kind >= 3:
-            vec[4] = 1.0  # p_lose_backgammon
-    return float(equity(vec, cube))
+    return float(equity(outcome_to_vector(result, perspective), cube))
 
 
 class ExpectimaxAgent:
@@ -161,7 +130,7 @@ class ExpectimaxAgent:
     def _chance_value(self, state: EnvState, depth: int) -> float:
         """Expected equity to ``state.turn``: average over the 21 rolls of its best reply."""
         total = 0.0
-        for roll, weight in _WEIGHTED_ROLLS:
+        for roll, weight in WEIGHTED_ROLLS:
             replies = legal_moves(state, roll)
             if replies:  # state.turn picks the reply best for itself
                 roll_value = self._best_value_to_mover([a for _, a in replies], depth - 1)

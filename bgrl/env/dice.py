@@ -28,6 +28,25 @@ def roll_dice(rng: np.random.Generator) -> Dice:
     return (int(rng.integers(1, 7)), int(rng.integers(1, 7)))
 
 
+def weighted_rolls() -> tuple[tuple[Dice, float], ...]:
+    """The 21 distinct dice rolls with probabilities: doubles 1/36, non-doubles 2/36.
+
+    Each non-double is listed once as ``(a, b)`` with ``a <= b``; move generation
+    explores both die orderings internally, so listing ``(b, a)`` too would double-count.
+    The weights sum to exactly 1. This is the chance-node distribution shared by
+    expectimax search and the pre-roll cube evaluator.
+    """
+    rolls: list[tuple[Dice, float]] = []
+    for a in range(1, 7):
+        for b in range(a, 7):
+            rolls.append(((a, b), (1.0 if a == b else 2.0) / 36.0))
+    return tuple(rolls)
+
+
+WEIGHTED_ROLLS = weighted_rolls()
+"""The 21 distinct rolls with their probabilities (see :func:`weighted_rolls`)."""
+
+
 @runtime_checkable
 class DiceSource(Protocol):
     """A stream of dice rolls a game pulls from, one per ply."""

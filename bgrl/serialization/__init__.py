@@ -12,14 +12,24 @@ from .checkpoint import (
     load_net,
     save_checkpoint,
 )
-from .gnubg import MoveAnalysis, SideSummary, analyse_mat, gnubg_available, summarize
-from .mat import game_to_mat, match_to_mat
+from .gnubg import (
+    CubeAnalysis,
+    MoveAnalysis,
+    SideSummary,
+    analyse_cube,
+    analyse_mat,
+    gnubg_available,
+    summarize,
+)
+from .mat import game_to_mat, match_to_mat, money_game_to_mat
 
 __all__ = [
     "CHECKPOINT_FORMAT_VERSION",
     "NET_REGISTRY",
+    "CubeAnalysis",
     "MoveAnalysis",
     "SideSummary",
+    "analyse_cube",
     "analyse_mat",
     "game_to_mat",
     "gnubg_available",
@@ -27,6 +37,7 @@ __all__ = [
     "load_checkpoint",
     "load_net",
     "match_to_mat",
+    "money_game_to_mat",
     "save_checkpoint",
     "summarize",
 ]

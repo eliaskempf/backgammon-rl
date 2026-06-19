@@ -29,6 +29,24 @@ def _best_from_metrics(run: Path) -> tuple[float, float, int] | None:
     return max(win_rates), float(rows[-1]["win_rate"]), int(rows[-1]["games"])
 
 
+def _final_calibration_eces(run: Path) -> tuple[float, float] | None:
+    """Return the final ``(win-gammon, win-backgammon)`` head ECEs from ``calibration.csv``.
+
+    Surfaces the WP6 magnitude-head calibration that gates the optional rollout
+    fine-tuning (A5): lower is better, and a persistently high backgammon ECE across the
+    sweep is the signal that the rare heads collapsed. ``None`` when a run has no
+    calibration log (e.g. a WP1 run trained without ``--calib-games``).
+    """
+    path = run / "calibration.csv"
+    if not path.exists():
+        return None
+    rows = list(csv.DictReader(path.open()))
+    if not rows:
+        return None
+    last = rows[-1]
+    return float(last["cal/p_win_g_ece"]), float(last["cal/p_win_bg_ece"])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rank TD(λ) sweep runs by vs-pubeval win-rate.")
     parser.add_argument("paths", nargs="*", help="run dirs (default: runs/sweep/*)")
@@ -68,7 +86,7 @@ def main() -> None:
         best_wr, final_wr, games = m
         best_pt = run / "best.pt"
         rank_wr = reeval(best_pt) if (reeval and best_pt.exists()) else best_wr
-        rows.append((rank_wr, best_wr, final_wr, games, run))
+        rows.append((rank_wr, best_wr, final_wr, games, _final_calibration_eces(run), run))
 
     if not rows:
         print("no usable runs")
@@ -76,10 +94,18 @@ def main() -> None:
 
     rows.sort(key=lambda r: r[0], reverse=True)  # by rank_wr (Path isn't orderable on ties)
     label = f"reeval({args.reeval_pairs})" if reeval else "best(csv)"
-    print(f"{'rank_wr':>10} {'best_csv':>9} {'final':>7} {'games':>9}  run ({label})")
-    for rank_wr, best_wr, final_wr, games, run in rows:
-        print(f"{rank_wr:>10.3f} {best_wr:>9.3f} {final_wr:>7.3f} {games:>9}  {run}")
-    winner = rows[0][4]
+    # Calibration columns appear only when at least one run logged it (WP6 --calib-games);
+    # ranking stays win-rate-first, with the magnitude-head ECEs surfaced to inform the pick.
+    show_cal = any(r[4] is not None for r in rows)
+    cal_head = f"{'gam_ece':>8} {'bg_ece':>8} " if show_cal else ""
+    print(f"{'rank_wr':>10} {'best_csv':>9} {'final':>7} {'games':>9} {cal_head} run ({label})")
+    for rank_wr, best_wr, final_wr, games, eces, run in rows:
+        cal_cell = ""
+        if show_cal:
+            dash = f"{'-':>8} {'-':>8} "
+            cal_cell = f"{eces[0]:>8.3f} {eces[1]:>8.3f} " if eces is not None else dash
+        print(f"{rank_wr:>10.3f} {best_wr:>9.3f} {final_wr:>7.3f} {games:>9} {cal_cell} {run}")
+    winner = rows[0][5]
     print(f"\nbest run: {winner}  ->  {winner / 'best.pt'}")
 
 
